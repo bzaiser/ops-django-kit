@@ -1,0 +1,30 @@
+{% extends "design_studio/layouts/list_page.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Audit-Log" %}{% endblock %}
+{% block page_title %}<i class="bi bi-shield-check me-2"></i>{% trans "Audit-Log" %}{% endblock %}
+{% block page_subtitle %}{% trans "Letzte 200 System- und Benutzeraktionen" %}{% endblock %}
+
+{% block table_head %}
+<tr>
+    <th>{% trans "Zeit" %}</th>
+    <th>{% trans "Benutzer" %}</th>
+    <th>{% trans "Aktion" %}</th>
+    <th>{% trans "Ziel" %}</th>
+    <th>{% trans "IP" %}</th>
+</tr>
+{% endblock %}
+
+{% block table_body %}
+{% for log in logs %}
+<tr>
+    <td class="small text-muted">{{ log.created_at|date:"Y-m-d H:i:s" }}</td>
+    <td>{{ log.user.username|default:"System" }}</td>
+    <td><span class="badge bg-primary">{{ log.action }}</span></td>
+    <td>{{ log.target|default:"—" }}</td>
+    <td class="small font-monospace">{{ log.ip_address|default:"—" }}</td>
+</tr>
+{% empty %}
+<tr><td colspan="5" class="text-center text-muted py-4">{% trans "Keine Einträge." %}</td></tr>
+{% endfor %}
+{% endblock %}
