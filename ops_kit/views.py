@@ -1,12 +1,14 @@
 import shutil
 
 from django.conf import settings
+from django.contrib import messages
 from django.contrib.admin.views.decorators import staff_member_required
 from django.db import connection
 from django.http import JsonResponse
-from django.shortcuts import render
+from django.shortcuts import redirect, render
 
-from .models import AuditLog
+from .models import AuditLog, UpdateSettings
+from .updater import apply_nas_updates, check_github_updates, is_desktop_frozen
 
 
 def healthz_view(request):
@@ -36,3 +38,49 @@ def healthz_view(request):
 def audit_log_view(request):
     logs = AuditLog.objects.select_related("user")[:200]
     return render(request, "ops_kit/audit_log.html", {"logs": logs})
+
+
+@staff_member_required
+def updates_view(request):
+    cfg = UpdateSettings.get_solo()
+    if request.method == "POST":
+        action = request.POST.get("action", "save_config")
+        if action == "save_config":
+            cfg.enabled = bool(request.POST.get("enabled"))
+            cfg.check_on_startup = bool(request.POST.get("check_on_startup"))
+            cfg.auto_apply_kits = bool(request.POST.get("auto_apply_kits"))
+            try:
+                cfg.check_interval_hours = max(1, min(168, int(request.POST.get("check_interval_hours") or 24)))
+            except (TypeError, ValueError):
+                cfg.check_interval_hours = 24
+            cfg.github_repo = (request.POST.get("github_repo") or "").strip()[:160]
+            cfg.save()
+            messages.success(request, "Update-Einstellungen gespeichert.")
+        elif action == "check_now":
+            res = check_github_updates(cfg, force=True)
+            if res.get("has_updates"):
+                messages.warning(request, "Neue Updates auf GitHub verfügbar.")
+            else:
+                messages.success(request, "Alles aktuell.")
+        elif action == "apply_now":
+            if is_desktop_frozen():
+                messages.info(request, "Im Desktop-Modus (.exe) bitte das Release über den Download-Link installieren.")
+            else:
+                try:
+                    apply_nas_updates(cfg, reload_gunicorn=True, user=request.user)
+                    messages.success(request, "Updates erfolgreich eingespielt und Server neu geladen.")
+                except Exception as exc:
+                    messages.error(request, f"Update fehlgeschlagen: {exc}")
+        return redirect("ops_kit:updates")
+
+    result = cfg.last_result_json or {}
+    return render(
+        request,
+        "ops_kit/updates.html",
+        {
+            "cfg": cfg,
+            "items": result.get("items") or [],
+            "has_updates": bool(result.get("has_updates")),
+            "is_desktop": is_desktop_frozen(),
+        },
+    )

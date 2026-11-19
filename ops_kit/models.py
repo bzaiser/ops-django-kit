@@ -35,3 +35,28 @@ def log_audit(user, action: str, target: str = "", details: str = "", request=No
         details=details,
         ip_address=ip,
     )
+
+
+class UpdateSettings(models.Model):
+    enabled = models.BooleanField(default=True)
+    check_on_startup = models.BooleanField(default=True)
+    auto_apply_kits = models.BooleanField(default=True)
+    check_interval_hours = models.PositiveSmallIntegerField(default=24)
+    github_repo = models.CharField(max_length=160, blank=True, default="")
+    last_checked_at = models.DateTimeField(null=True, blank=True)
+    last_status = models.CharField(max_length=32, blank=True, default="never")
+    installed_commits_json = models.JSONField(default=dict, blank=True)
+    last_result_json = models.JSONField(default=dict, blank=True)
+    last_log = models.TextField(blank=True, default="")
+
+    @classmethod
+    def get_solo(cls):
+        default_repo = str(getattr(settings, "OPS_GITHUB_REPO", "") or "").strip()[:160]
+        obj, created = cls.objects.get_or_create(pk=1, defaults={"github_repo": default_repo})
+        if not created and not obj.github_repo and default_repo:
+            obj.github_repo = default_repo
+            obj.save(update_fields=["github_repo"])
+        return obj
+
+    def __str__(self):
+        return f"UpdateSettings ({self.last_status})"

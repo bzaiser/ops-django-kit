@@ -87,6 +87,55 @@ class OpsKitTests(TestCase):
             files = list(Path(tmp).glob("backup_*.json"))
             self.assertEqual(len(files), 1)
 
+    def test_github_auto_update_settings_check_and_startup_interval(self):
+        from ops_kit.models import UpdateSettings
+        from ops_kit.updater import check_github_updates, should_run_startup_check
+
+        cfg = UpdateSettings.get_solo()
+        self.assertTrue(cfg.enabled)
+        self.assertTrue(cfg.check_on_startup)
+        self.assertTrue(cfg.auto_apply_kits)
+        self.assertEqual(cfg.check_interval_hours, 24)
+        self.assertTrue(should_run_startup_check(cfg))
+
+        cfg.installed_commits_json = {"design_studio": "111111111111", "ops_kit": "222222222222"}
+        cfg.save()
+
+        def fake_fetch(url):
+            if "django-design-studio" in url:
+                return {"sha": "aaaaaaaaaaaa9999", "commit": {"message": "feat: new liquid"}}
+            return {"sha": "222222222222", "commit": {"message": "chore: ok"}}
+
+        res = check_github_updates(cfg, force=True, fetch_json=fake_fetch)
+        self.assertTrue(res["has_updates"])
+        self.assertEqual(cfg.last_status, "update_available")
+        self.assertFalse(should_run_startup_check(cfg))
+
+        out = io.StringIO()
+        call_command("ops_auto_update", startup=True, stdout=out)
+        self.assertIn("übersprungen", out.getvalue())
+
+        self.client.force_login(self.staff)
+        r_get = self.client.get("/ops/updates/")
+        self.assertEqual(r_get.status_code, 200)
+        self.assertIn("Auto-Updates (GitHub)", r_get.content.decode("utf-8"))
+
+        r_post = self.client.post(
+            "/ops/updates/",
+            {
+                "action": "save_config",
+                "enabled": "on",
+                "check_on_startup": "on",
+                "auto_apply_kits": "on",
+                "check_interval_hours": "12",
+                "github_repo": "bzaiser/finanzplan",
+            },
+        )
+        self.assertEqual(r_post.status_code, 302)
+        cfg.refresh_from_db()
+        self.assertEqual(cfg.check_interval_hours, 12)
+        self.assertEqual(cfg.github_repo, "bzaiser/finanzplan")
+
 
 if __name__ == "__main__":
     from django.test.runner import DiscoverRunner
