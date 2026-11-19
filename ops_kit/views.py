@@ -6,6 +6,7 @@ from django.contrib.admin.views.decorators import staff_member_required
 from django.db import connection
 from django.http import JsonResponse
 from django.shortcuts import redirect, render
+from django.utils.http import url_has_allowed_host_and_scheme
 
 from .models import AuditLog, UpdateSettings
 from .updater import apply_nas_updates, check_github_updates, is_desktop_frozen
@@ -71,16 +72,20 @@ def updates_view(request):
                     messages.success(request, "Updates erfolgreich eingespielt und Server neu geladen.")
                 except Exception as exc:
                     messages.error(request, f"Update fehlgeschlagen: {exc}")
+        next_url = (request.POST.get("next") or "").strip()
+        if next_url and url_has_allowed_host_and_scheme(next_url, allowed_hosts={request.get_host()}):
+            return redirect(next_url)
         return redirect("ops_kit:updates")
 
+    return render(request, "ops_kit/updates.html", get_updates_context())
+
+
+def get_updates_context():
+    cfg = UpdateSettings.get_solo()
     result = cfg.last_result_json or {}
-    return render(
-        request,
-        "ops_kit/updates.html",
-        {
-            "cfg": cfg,
-            "items": result.get("items") or [],
-            "has_updates": bool(result.get("has_updates")),
-            "is_desktop": is_desktop_frozen(),
-        },
-    )
+    return {
+        "cfg": cfg,
+        "items": result.get("items") or [],
+        "has_updates": bool(result.get("has_updates")),
+        "is_desktop": is_desktop_frozen(),
+    }
