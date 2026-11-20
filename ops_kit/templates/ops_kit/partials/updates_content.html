@@ -32,7 +32,7 @@
     </div>
 </div>
 
-<div id="ops-update-progress" class="alert alert-info {% if cfg.last_status != 'running' %}d-none{% endif %} mb-3" role="status">
+<div id="ops-update-progress" {% if cfg.last_status == 'running' %}data-ops-running="1"{% endif %} class="alert alert-info {% if cfg.last_status != 'running' %}d-none{% endif %} mb-3" role="status">
     <div class="d-flex align-items-center gap-2 mb-2 fw-semibold">
         <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
         <span id="ops-update-progress-text">{% if cfg.last_status == 'running' %}{% trans "Update läuft im Hintergrund (Kits installieren, migrate, collectstatic)..." %}{% else %}{% trans "Bitte warten..." %}{% endif %}</span>
@@ -202,9 +202,24 @@ document.addEventListener('DOMContentLoaded', function () {
     });
     {% if cfg.last_status == 'running' %}
     var polls = parseInt(sessionStorage.getItem('opsUpdatePolls') || '0', 10);
-    if (polls < 15) {
+    if (polls < 30) {
         sessionStorage.setItem('opsUpdatePolls', String(polls + 1));
-        setTimeout(function () { window.location.reload(); }, 4000);
+        setTimeout(function pollStatus() {
+            fetch(window.location.href, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+                .then(function (r) { return r.ok ? r.text() : ''; })
+                .then(function (html) {
+                    if (html && html.indexOf('data-ops-running="1"') === -1) {
+                        sessionStorage.removeItem('opsUpdatePolls');
+                        window.location.reload();
+                    } else if (parseInt(sessionStorage.getItem('opsUpdatePolls') || '0', 10) < 30) {
+                        sessionStorage.setItem('opsUpdatePolls', String(parseInt(sessionStorage.getItem('opsUpdatePolls') || '0', 10) + 1));
+                        setTimeout(pollStatus, 3000);
+                    }
+                })
+                .catch(function () {
+                    setTimeout(pollStatus, 4000);
+                });
+        }, 3000);
     } else {
         sessionStorage.removeItem('opsUpdatePolls');
     }
