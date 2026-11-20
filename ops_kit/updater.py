@@ -305,7 +305,41 @@ def check_github_updates(cfg: UpdateSettings | None = None, force: bool = False,
     cfg.last_status = "error" if (errors and not items) else ("update_available" if has_updates else "ok")
     cfg.last_result_json = result
     cfg.save()
+
+    if has_updates:
+        updated_names = [i.get("key") for i in items if i.get("update_available")]
+        _notify_staff_topic(
+            topic="ops.update_available",
+            title="GitHub-Updates verfügbar",
+            message=f"Neue Versionen gefunden für: {', '.join(updated_names)}",
+            level="info",
+        )
+    elif errors:
+        _notify_staff_topic(
+            topic="ops.update_error",
+            title="Update-Prüfung fehlgeschlagen",
+            message="; ".join(errors)[:400],
+            level="danger",
+        )
+
     return result
+
+
+def _notify_staff_topic(topic: str, title: str, message: str, level: str = "info", link: str = "/ops/updates/"):
+    try:
+        from django.contrib.auth import get_user_model
+        from notify_kit.models import Notification
+        from notify_kit.services import send_notification
+    except Exception:
+        return
+    User = get_user_model()
+    for staff_user in User.objects.filter(is_active=True, is_staff=True):
+        if Notification.objects.filter(user=staff_user, topic=topic, title=title, is_read=False).exists():
+            continue
+        try:
+            send_notification(user=staff_user, title=title, message=message, level=level, link=link, topic=topic)
+        except Exception:
+            pass
 
 
 def apply_nas_updates(cfg: UpdateSettings | None = None, reload_gunicorn: bool = True, user=None) -> str:

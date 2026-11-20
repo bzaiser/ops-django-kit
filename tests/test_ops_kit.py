@@ -11,25 +11,29 @@ from django.test import Client, TestCase
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DS_DIR = os.path.join(os.path.dirname(BASE_DIR), "django-design-studio")
-for p in (BASE_DIR, DS_DIR):
+NOTIFY_DIR = os.path.join(os.path.dirname(BASE_DIR), "notify-django-kit")
+for p in (BASE_DIR, DS_DIR, NOTIFY_DIR):
     if p not in sys.path and os.path.isdir(p):
         sys.path.insert(0, p)
 
 if not settings.configured:
+    installed_apps = [
+        "django.contrib.auth",
+        "django.contrib.contenttypes",
+        "django.contrib.sessions",
+        "django.contrib.messages",
+        "django.contrib.staticfiles",
+        "design_studio",
+        "ops_kit",
+    ]
+    if os.path.isdir(NOTIFY_DIR):
+        installed_apps.append("notify_kit")
     settings.configure(
         DEBUG=True,
         SECRET_KEY="test-ops-kit",
         BASE_DIR=BASE_DIR,
         DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
-        INSTALLED_APPS=[
-            "django.contrib.auth",
-            "django.contrib.contenttypes",
-            "django.contrib.sessions",
-            "django.contrib.messages",
-            "django.contrib.staticfiles",
-            "design_studio",
-            "ops_kit",
-        ],
+        INSTALLED_APPS=installed_apps,
         MIDDLEWARE=[
             "django.contrib.sessions.middleware.SessionMiddleware",
             "django.middleware.common.CommonMiddleware",
@@ -135,6 +139,15 @@ class OpsKitTests(TestCase):
         cfg.refresh_from_db()
         self.assertEqual(cfg.check_interval_hours, 12)
         self.assertEqual(cfg.github_repo, "bzaiser/finanzplan")
+
+        if "notify_kit" in settings.INSTALLED_APPS:
+            from notify_kit.models import Notification
+            from notify_kit.registry import get_topic
+            self.assertIsNotNone(get_topic("ops.update_available"))
+            self.assertEqual(Notification.objects.filter(user=self.staff, topic="ops.update_available").count(), 1)
+            # Second check should not create a duplicate unread notification
+            check_github_updates(cfg, force=True, fetch_json=fake_fetch)
+            self.assertEqual(Notification.objects.filter(user=self.staff, topic="ops.update_available").count(), 1)
 
 
 if __name__ == "__main__":
