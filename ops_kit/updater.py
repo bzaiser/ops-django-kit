@@ -1,6 +1,8 @@
 from datetime import timedelta
+import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import sys
 import urllib.request
 
@@ -61,6 +63,59 @@ def should_run_startup_check(cfg: UpdateSettings) -> bool:
 def active_kit_repos() -> list[tuple[str, str]]:
     installed = set(getattr(settings, "INSTALLED_APPS", []))
     return [(k, repo) for k, repo in KIT_GITHUB_REPOS.items() if k in installed]
+
+
+KIT_METADATA = {
+    "design_studio": ("Design Studio", ""),
+    "domain_kit": ("Stammdaten / Domain Kit", 'path("domain/", include("domain_kit.urls")),'),
+    "auth_kit": ("Auth / Profil Kit", 'path("accounts/", include("auth_kit.urls")),'),
+    "notify_kit": ("Benachrichtigungen", 'path("notifications/", include("notify_kit.urls")),'),
+    "cal_kit": ("Kalender", 'path("calendar/", include("cal_kit.urls")),'),
+    "grid_kit": ("DataGrid-Tabellen", ""),
+    "seed_kit": ("Demo-Daten Seeder", ""),
+    "ops_kit": ("Ops & Auto-Updates", 'path("ops/", include("ops_kit.urls")),'),
+}
+
+
+def get_optional_kits_catalog() -> list[dict]:
+    installed_apps = set(getattr(settings, "INSTALLED_APPS", []))
+    catalog = []
+    for key, repo in KIT_GITHUB_REPOS.items():
+        if key in installed_apps:
+            continue
+        label, url_snippet = KIT_METADATA.get(key, (key, ""))
+        pip_installed = importlib.util.find_spec(key) is not None
+        catalog.append({
+            "key": key,
+            "label": label,
+            "repo": repo,
+            "pip_installed": pip_installed,
+            "url_snippet": url_snippet,
+        })
+    return catalog
+
+
+def install_kit_package(kit_key: str, user=None) -> str:
+    if kit_key not in KIT_GITHUB_REPOS:
+        raise ValueError(f"Unbekanntes Kit: {kit_key}")
+    if is_desktop_frozen():
+        return "Desktop-Modus (.exe): Nachinstallation im Bundle nicht unterstützt."
+    import os
+    repo = KIT_GITHUB_REPOS[kit_key]
+    zip_url = f"https://github.com/{repo}/archive/refs/heads/main.zip"
+    cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "--force-reinstall", "--no-deps", "--no-cache-dir"]
+    target_dir = Path("/opt/ds-pkg")
+    if target_dir.exists() and os.access(target_dir, os.W_OK):
+        cmd.extend(["--target", str(target_dir)])
+    cmd.append(zip_url)
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    out = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+    cfg = UpdateSettings.get_solo()
+    cfg.last_status = "updated"
+    cfg.last_log = f"Kit {kit_key} installiert:\n{out}"[-4000:]
+    cfg.save(update_fields=["last_status", "last_log"])
+    log_audit(user, "KIT_INSTALLED", target=kit_key, details=out[:500])
+    return out
 
 
 def check_github_updates(cfg: UpdateSettings | None = None, force: bool = False, fetch_json=None) -> dict:

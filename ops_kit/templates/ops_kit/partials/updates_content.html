@@ -129,6 +129,58 @@
         </div>
     </div>
 </div>
+{% if optional_kits and not is_desktop %}
+<div class="card shadow-sm mt-3">
+    <div class="card-header fw-bold d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-puzzle me-1"></i> {% trans "Weitere Baukasten-Kits nachinstallieren" %}</span>
+        <span class="small text-muted fw-normal">{% trans "Nach Installation in settings.py (INSTALLED_APPS) & urls.py aktivieren" %}</span>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead>
+                <tr>
+                    <th>{% trans "Kit" %}</th>
+                    <th>{% trans "Status" %}</th>
+                    <th>{% trans "Einbindung" %}</th>
+                    <th class="text-end">{% trans "Aktion" %}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for ok in optional_kits %}
+                <tr>
+                    <td>
+                        <div class="fw-semibold">{{ ok.label }}</div>
+                        <div class="small text-muted font-monospace">{{ ok.repo }}</div>
+                    </td>
+                    <td>
+                        {% if ok.pip_installed %}
+                        <span class="badge bg-info text-dark">{% trans "Paket installiert (nicht in INSTALLED_APPS)" %}</span>
+                        {% else %}
+                        <span class="badge bg-secondary bg-opacity-50">{% trans "Nicht installiert" %}</span>
+                        {% endif %}
+                    </td>
+                    <td class="small font-monospace">
+                        <div>'{{ ok.key }}',</div>
+                        {% if ok.url_snippet %}<div class="text-muted">{{ ok.url_snippet }}</div>{% endif %}
+                    </td>
+                    <td class="text-end">
+                        <form method="post" action="{% url 'ops_kit:updates' %}" class="d-inline js-ops-update-form" data-progress-text="{% trans 'Installiere Kit im Hintergrund — bitte warten...' %}">
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="install_kit">
+                            <input type="hidden" name="kit_key" value="{{ ok.key }}">
+                            {% if ops_updates_next %}<input type="hidden" name="next" value="{{ ops_updates_next }}">{% endif %}
+                            <button type="submit" class="btn btn-sm btn-outline-primary rounded-pill px-3">
+                                <i class="bi bi-plus-circle me-1"></i> {% if ok.pip_installed %}{% trans "Aktualisieren" %}{% else %}{% trans "Nachinstallieren" %}{% endif %}
+                            </button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
 {% if cfg.last_log %}
 <div class="card shadow-sm mt-3">
     <div class="card-header fw-bold small"><i class="bi bi-terminal me-1"></i> {% trans "Letztes Update-Protokoll" %} ({{ cfg.last_status|default:"—" }})</div>
