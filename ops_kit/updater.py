@@ -40,15 +40,35 @@ def get_local_app_version() -> str:
 
 
 def _default_fetch_json(url: str, timeout: int = 4) -> dict:
-    req = urllib.request.Request(
-        url,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "ops-django-kit-updater/1.0",
-        },
-    )
+    import os
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "ops-django-kit-updater/1.0",
+    }
+    token = (os.environ.get("OPS_GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN") or "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def _fetch_remote_head_sha(repo: str, timeout: int = 5) -> str:
+    """Use `git ls-remote` to read main HEAD SHA without GitHub REST API rate limits."""
+    try:
+        proc = subprocess.run(
+            ["git", "ls-remote", f"https://github.com/{repo}.git", "refs/heads/main"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=True,
+        )
+        line = (proc.stdout or "").strip().splitlines()
+        if line:
+            return line[0].split()[0][:12]
+    except Exception:
+        pass
+    return ""
 
 
 def should_run_startup_check(cfg: UpdateSettings) -> bool:
@@ -132,9 +152,12 @@ def check_github_updates(cfg: UpdateSettings | None = None, force: bool = False,
     for key, repo in active_kit_repos():
         url = f"https://api.github.com/repos/{repo}/commits/main"
         try:
-            data = fetcher(url)
-            remote_sha = str(data.get("sha") or "")[:12]
-            commit_msg = str(((data.get("commit") or {}).get("message") or "")).splitlines()[0][:90]
+            remote_sha = _fetch_remote_head_sha(repo) if fetch_json is None else ""
+            commit_msg = ""
+            if not remote_sha:
+                data = fetcher(url)
+                remote_sha = str(data.get("sha") or "")[:12]
+                commit_msg = str(((data.get("commit") or {}).get("message") or "")).splitlines()[0][:90]
             local_sha = str(known.get(key) or "")[:12]
             if not local_sha and remote_sha:
                 # Erster Baseline-Scan: aktuellen Stand merken, wenn noch nichts hinterlegt ist
