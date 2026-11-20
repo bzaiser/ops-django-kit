@@ -317,11 +317,22 @@ def apply_nas_updates(cfg: UpdateSettings | None = None, reload_gunicorn: bool =
     import os
     import signal
     buf = io.StringIO()
-    call_command("design_studio_update", all_kits=True, reload_gunicorn=False, stdout=buf, stderr=buf)
+    items = (cfg.last_result_json or {}).get("items") or []
+    outdated = [
+        i["key"]
+        for i in items
+        if i.get("kind") == "kit" and i.get("update_available") and i.get("key") in KIT_GITHUB_REPOS
+    ]
+    active_keys = [k for k, _ in active_kit_repos()]
+    if outdated and len(outdated) < len(active_keys):
+        for k in outdated:
+            repo_url = f"https://github.com/{KIT_GITHUB_REPOS[k]}/archive/refs/heads/main.zip"
+            call_command("design_studio_update", repo=repo_url, all_kits=False, reload_gunicorn=False, skip_migrate=(k != outdated[-1]), skip_collectstatic=(k != outdated[-1]), stdout=buf, stderr=buf)
+    else:
+        call_command("design_studio_update", all_kits=True, reload_gunicorn=False, stdout=buf, stderr=buf)
     out = buf.getvalue()
 
     known = dict(cfg.installed_commits_json or {})
-    items = (cfg.last_result_json or {}).get("items") or []
     for item in items:
         if item.get("kind") == "kit" and item.get("remote"):
             known[item["key"]] = item["remote"]
