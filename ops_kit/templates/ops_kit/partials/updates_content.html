@@ -11,7 +11,7 @@
         <a href="{% url 'ops_kit:audit_log' %}" class="btn btn-sm btn-outline-secondary rounded-pill px-3">
             <i class="bi bi-shield-check me-1"></i> {% trans "Audit-Log" %}
         </a>
-        <form method="post" action="{% url 'ops_kit:updates' %}" class="d-inline">
+        <form method="post" action="{% url 'ops_kit:updates' %}" class="d-inline js-ops-update-form" data-progress-text="{% trans 'Prüfe GitHub auf neue Versionen...' %}">
             {% csrf_token %}
             <input type="hidden" name="action" value="check_now">
             {% if ops_updates_next %}<input type="hidden" name="next" value="{{ ops_updates_next }}">{% endif %}
@@ -20,7 +20,7 @@
             </button>
         </form>
         {% if not is_desktop %}
-        <form method="post" action="{% url 'ops_kit:updates' %}" class="d-inline">
+        <form method="post" action="{% url 'ops_kit:updates' %}" class="d-inline js-ops-update-form" data-progress-text="{% trans 'Installiere Kits von GitHub und lade Server neu — bitte warten...' %}">
             {% csrf_token %}
             <input type="hidden" name="action" value="apply_now">
             {% if ops_updates_next %}<input type="hidden" name="next" value="{{ ops_updates_next }}">{% endif %}
@@ -29,6 +29,16 @@
             </button>
         </form>
         {% endif %}
+    </div>
+</div>
+
+<div id="ops-update-progress" class="alert alert-info d-none mb-3" role="status">
+    <div class="d-flex align-items-center gap-2 mb-2 fw-semibold">
+        <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+        <span id="ops-update-progress-text">{% trans "Bitte warten..." %}</span>
+    </div>
+    <div class="progress" style="height: 8px;">
+        <div class="progress-bar progress-bar-striped progress-bar-animated w-100"></div>
     </div>
 </div>
 
@@ -119,3 +129,24 @@
         </div>
     </div>
 </div>
+{% if cfg.last_log %}
+<div class="card shadow-sm mt-3">
+    <div class="card-header fw-bold small"><i class="bi bi-terminal me-1"></i> {% trans "Letztes Update-Protokoll" %} ({{ cfg.last_status|default:"—" }})</div>
+    <pre class="mb-0 p-3 small font-monospace" style="max-height: 220px; overflow: auto; white-space: pre-wrap;">{{ cfg.last_log }}</pre>
+</div>
+{% endif %}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    var box = document.getElementById('ops-update-progress');
+    var txt = document.getElementById('ops-update-progress-text');
+    document.querySelectorAll('.js-ops-update-form').forEach(function (form) {
+        form.addEventListener('submit', function () {
+            if (box) box.classList.remove('d-none');
+            if (txt && form.dataset.progressText) txt.textContent = form.dataset.progressText;
+            document.querySelectorAll('.js-ops-update-form button[type="submit"]').forEach(function (b) {
+                b.disabled = true;
+            });
+        });
+    });
+});
+</script>
