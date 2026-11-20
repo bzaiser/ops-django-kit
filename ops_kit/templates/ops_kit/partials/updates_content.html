@@ -149,7 +149,15 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     });
     {% if cfg.last_status == 'running' %}
-    setTimeout(function () { window.location.reload(); }, 4000);
+    var polls = parseInt(sessionStorage.getItem('opsUpdatePolls') || '0', 10);
+    if (polls < 15) {
+        sessionStorage.setItem('opsUpdatePolls', String(polls + 1));
+        setTimeout(function () { window.location.reload(); }, 4000);
+    } else {
+        sessionStorage.removeItem('opsUpdatePolls');
+    }
+    {% else %}
+    sessionStorage.removeItem('opsUpdatePolls');
     {% endif %}
 });
 </script>

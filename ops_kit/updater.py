@@ -165,8 +165,10 @@ def apply_nas_updates(cfg: UpdateSettings | None = None, reload_gunicorn: bool =
         return "Desktop-Modus (.exe): Bitte Release über den Download-Link installieren."
 
     import io
+    import os
+    import signal
     buf = io.StringIO()
-    call_command("design_studio_update", all_kits=True, reload_gunicorn=reload_gunicorn, stdout=buf, stderr=buf)
+    call_command("design_studio_update", all_kits=True, reload_gunicorn=False, stdout=buf, stderr=buf)
     out = buf.getvalue()
 
     known = dict(cfg.installed_commits_json or {})
@@ -185,4 +187,10 @@ def apply_nas_updates(cfg: UpdateSettings | None = None, reload_gunicorn: bool =
         cfg.last_result_json["items"] = items
     cfg.save()
     log_audit(user, "AUTO_UPDATE_APPLIED", target="all-kits", details=out[:500])
+
+    if reload_gunicorn and hasattr(signal, "SIGHUP"):
+        try:
+            os.kill(1, signal.SIGHUP)
+        except Exception:
+            pass
     return out
