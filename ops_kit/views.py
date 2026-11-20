@@ -48,8 +48,16 @@ def audit_log_view(request):
     return render(request, "ops_kit/audit_log.html", {"logs": logs})
 
 
+_UPDATE_THREAD = None
+
+
+def _is_update_thread_alive() -> bool:
+    return bool(_UPDATE_THREAD is not None and _UPDATE_THREAD.is_alive())
+
+
 @staff_member_required
 def updates_view(request):
+    global _UPDATE_THREAD
     cfg = UpdateSettings.get_solo()
     if request.method == "POST":
         action = request.POST.get("action", "save_config")
@@ -73,7 +81,7 @@ def updates_view(request):
         elif action == "apply_now":
             if is_desktop_frozen():
                 messages.info(request, "Im Desktop-Modus (.exe) bitte das Release über den Download-Link installieren.")
-            elif cfg.last_status == "running":
+            elif cfg.last_status == "running" and _is_update_thread_alive():
                 messages.info(request, "Update läuft bereits im Hintergrund.")
             else:
                 cfg.last_status = "running"
@@ -97,13 +105,14 @@ def updates_view(request):
                     finally:
                         connections.close_all()
 
-                threading.Thread(target=_bg_apply, daemon=True).start()
+                _UPDATE_THREAD = threading.Thread(target=_bg_apply, daemon=True)
+                _UPDATE_THREAD.start()
                 messages.info(request, "Update läuft im Hintergrund — Seite aktualisiert sich automatisch.")
         elif action == "install_kit":
             kit_key = (request.POST.get("kit_key") or "").strip()
             if is_desktop_frozen():
                 messages.info(request, "Nachinstallation im Desktop-Modus (.exe) nicht verfügbar.")
-            elif cfg.last_status == "running":
+            elif cfg.last_status == "running" and _is_update_thread_alive():
                 messages.info(request, "Ein Installationsvorgang läuft bereits im Hintergrund.")
             else:
                 cfg.last_status = "running"
@@ -127,7 +136,8 @@ def updates_view(request):
                     finally:
                         connections.close_all()
 
-                threading.Thread(target=_bg_install, daemon=True).start()
+                _UPDATE_THREAD = threading.Thread(target=_bg_install, daemon=True)
+                _UPDATE_THREAD.start()
                 messages.info(request, f"Installiere {kit_key} im Hintergrund — Seite aktualisiert sich automatisch.")
         next_url = (request.POST.get("next") or "").strip()
         if next_url and url_has_allowed_host_and_scheme(next_url, allowed_hosts={request.get_host()}):
