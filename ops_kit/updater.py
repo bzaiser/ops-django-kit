@@ -115,12 +115,53 @@ def get_optional_kits_catalog() -> list[dict]:
     return catalog
 
 
-def install_kit_package(kit_key: str, user=None) -> str:
+def _auto_wire_kit_in_project(kit_key: str, url_snippet: str) -> list[str]:
+    """Safely add kit_key to INSTALLED_APPS and url_snippet to urls.py if not already present."""
+    import os
+    import re
+    notes = []
+    base_dir = Path(getattr(settings, "BASE_DIR", "."))
+    settings_mod = os.environ.get("DJANGO_SETTINGS_MODULE", "") or ""
+    if settings_mod:
+        settings_path = base_dir.joinpath(*settings_mod.split(".")).with_suffix(".py")
+    else:
+        settings_path = base_dir / "config" / "settings.py"
+
+    root_urlconf = str(getattr(settings, "ROOT_URLCONF", "") or "")
+    if root_urlconf:
+        urls_path = base_dir.joinpath(*root_urlconf.split(".")).with_suffix(".py")
+    else:
+        urls_path = base_dir / "config" / "urls.py"
+
+    if settings_path.exists():
+        txt = settings_path.read_text(encoding="utf-8")
+        if f'"{kit_key}"' not in txt and f"'{kit_key}'" not in txt:
+            m = re.search(r"(INSTALLED_APPS\s*=\s*\[[\s\S]*?)(\n\])", txt)
+            if m:
+                new_txt = txt[:m.end(1)] + f'\n    "{kit_key}",' + txt[m.start(2):]
+                settings_path.write_text(new_txt, encoding="utf-8")
+                notes.append(f"settings.py: '{kit_key}' zu INSTALLED_APPS hinzugefügt.")
+
+    if url_snippet and urls_path.exists():
+        utxt = urls_path.read_text(encoding="utf-8")
+        if f"{kit_key}.urls" not in utxt:
+            if "include" not in utxt and "from django.urls import" in utxt:
+                utxt = re.sub(r"from django\.urls import ([^\n]+)", lambda r: f"from django.urls import include, {r.group(1)}", utxt, count=1)
+            m = re.search(r"(urlpatterns\s*=\s*\[[\s\S]*?)(\n\])", utxt)
+            if m:
+                new_utxt = utxt[:m.end(1)] + f"\n    {url_snippet}" + utxt[m.start(2):]
+                urls_path.write_text(new_utxt, encoding="utf-8")
+                notes.append(f"urls.py: {url_snippet} hinzugefügt.")
+    return notes
+
+
+def install_kit_package(kit_key: str, user=None, reload_gunicorn: bool = True) -> str:
     if kit_key not in KIT_GITHUB_REPOS:
         raise ValueError(f"Unbekanntes Kit: {kit_key}")
     if is_desktop_frozen():
         return "Desktop-Modus (.exe): Nachinstallation im Bundle nicht unterstützt."
     import os
+    import signal
     repo = KIT_GITHUB_REPOS[kit_key]
     zip_url = f"https://github.com/{repo}/archive/refs/heads/main.zip"
     cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "--force-reinstall", "--no-deps", "--no-cache-dir"]
@@ -128,13 +169,43 @@ def install_kit_package(kit_key: str, user=None) -> str:
     if target_dir.exists() and os.access(target_dir, os.W_OK):
         cmd.extend(["--target", str(target_dir)])
     cmd.append(zip_url)
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=180, check=True)
     out = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+
+    _, url_snippet = KIT_METADATA.get(kit_key, (kit_key, ""))
+    try:
+        wire_notes = _auto_wire_kit_in_project(kit_key, url_snippet)
+        if wire_notes:
+            out += "\n" + "\n".join(wire_notes)
+    except Exception as exc:
+        out += f"\nAuto-Aktivierung Warnung: {exc}"
+
+    manage_py = Path(getattr(settings, "BASE_DIR", ".")) / "manage.py"
+    if manage_py.exists():
+        for mcmd in (
+            [sys.executable, str(manage_py), "migrate", "--noinput"],
+            [sys.executable, str(manage_py), "collectstatic", "--clear", "--noinput"],
+        ):
+            try:
+                mp = subprocess.run(mcmd, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=120)
+                if mp.stdout:
+                    out += "\n" + mp.stdout
+                if mp.stderr:
+                    out += "\n" + mp.stderr
+            except Exception as exc:
+                out += f"\n{mcmd[-2]} Hinweis: {exc}"
+
     cfg = UpdateSettings.get_solo()
     cfg.last_status = "updated"
-    cfg.last_log = f"Kit {kit_key} installiert:\n{out}"[-4000:]
+    cfg.last_log = f"Kit {kit_key} installiert & aktiviert:\n{out}"[-4000:]
     cfg.save(update_fields=["last_status", "last_log"])
     log_audit(user, "KIT_INSTALLED", target=kit_key, details=out[:500])
+
+    if reload_gunicorn and hasattr(signal, "SIGHUP"):
+        try:
+            os.kill(1, signal.SIGHUP)
+        except Exception:
+            pass
     return out
 
 
