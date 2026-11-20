@@ -1,9 +1,10 @@
 import shutil
+import threading
 
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.admin.views.decorators import staff_member_required
-from django.db import connection
+from django.db import connection, connections
 from django.http import JsonResponse
 from django.shortcuts import redirect, render
 from django.utils.http import url_has_allowed_host_and_scheme
@@ -66,12 +67,32 @@ def updates_view(request):
         elif action == "apply_now":
             if is_desktop_frozen():
                 messages.info(request, "Im Desktop-Modus (.exe) bitte das Release über den Download-Link installieren.")
+            elif cfg.last_status == "running":
+                messages.info(request, "Update läuft bereits im Hintergrund.")
             else:
-                try:
-                    apply_nas_updates(cfg, reload_gunicorn=True, user=request.user)
-                    messages.success(request, "Updates erfolgreich eingespielt und Server neu geladen.")
-                except Exception as exc:
-                    messages.error(request, f"Update fehlgeschlagen: {exc}")
+                cfg.last_status = "running"
+                cfg.last_log = "Update gestartet — lade Kits von GitHub..."
+                cfg.save(update_fields=["last_status", "last_log"])
+                user_id = getattr(request.user, "pk", None)
+
+                def _bg_apply():
+                    try:
+                        from django.contrib.auth import get_user_model
+                        u = get_user_model().objects.filter(pk=user_id).first() if user_id else None
+                        apply_nas_updates(UpdateSettings.get_solo(), reload_gunicorn=True, user=u)
+                    except Exception as exc:
+                        try:
+                            c = UpdateSettings.get_solo()
+                            c.last_status = "error"
+                            c.last_log = f"Update fehlgeschlagen: {exc}"
+                            c.save(update_fields=["last_status", "last_log"])
+                        except Exception:
+                            pass
+                    finally:
+                        connections.close_all()
+
+                threading.Thread(target=_bg_apply, daemon=True).start()
+                messages.info(request, "Update läuft im Hintergrund — Seite aktualisiert sich automatisch.")
         next_url = (request.POST.get("next") or "").strip()
         if next_url and url_has_allowed_host_and_scheme(next_url, allowed_hosts={request.get_host()}):
             return redirect(next_url)

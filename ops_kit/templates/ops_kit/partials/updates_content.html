@@ -32,10 +32,10 @@
     </div>
 </div>
 
-<div id="ops-update-progress" class="alert alert-info d-none mb-3" role="status">
+<div id="ops-update-progress" class="alert alert-info {% if cfg.last_status != 'running' %}d-none{% endif %} mb-3" role="status">
     <div class="d-flex align-items-center gap-2 mb-2 fw-semibold">
         <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
-        <span id="ops-update-progress-text">{% trans "Bitte warten..." %}</span>
+        <span id="ops-update-progress-text">{% if cfg.last_status == 'running' %}{% trans "Update läuft im Hintergrund (Kits installieren, migrate, collectstatic)..." %}{% else %}{% trans "Bitte warten..." %}{% endif %}</span>
     </div>
     <div class="progress" style="height: 8px;">
         <div class="progress-bar progress-bar-striped progress-bar-animated w-100"></div>
@@ -148,5 +148,8 @@ document.addEventListener('DOMContentLoaded', function () {
             });
         });
     });
+    {% if cfg.last_status == 'running' %}
+    setTimeout(function () { window.location.reload(); }, 4000);
+    {% endif %}
 });
 </script>
