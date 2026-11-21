@@ -149,6 +149,28 @@ class OpsKitTests(TestCase):
             check_github_updates(cfg, force=True, fetch_json=fake_fetch)
             self.assertEqual(Notification.objects.filter(user=self.staff, topic="ops.update_available").count(), 1)
 
+    def test_auto_wire_kit_inserts_before_root_catchall(self):
+        from ops_kit.updater import _auto_wire_kit_in_project
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            conf_dir = tmp_path / "config"
+            conf_dir.mkdir()
+            settings_file = conf_dir / "settings.py"
+            settings_file.write_text("INSTALLED_APPS = [\n    'django.contrib.admin',\n]\n", encoding="utf-8")
+            urls_file = conf_dir / "urls.py"
+            urls_file.write_text(
+                "from django.urls import path\nurlpatterns = [\n    path('admin/', admin.site.urls),\n    path('', include('core.urls')),\n]\n",
+                encoding="utf-8",
+            )
+            with self.settings(BASE_DIR=tmp_path, ROOT_URLCONF="config.urls"):
+                notes = _auto_wire_kit_in_project("cal_kit", 'path("calendar/", include("cal_kit.urls")),')
+                new_urls = urls_file.read_text(encoding="utf-8")
+                self.assertIn('path("calendar/", include("cal_kit.urls")),', new_urls)
+                # Ensure calendar/ appears BEFORE path('',
+                cal_idx = new_urls.index('path("calendar/"')
+                root_idx = new_urls.index("path('',")
+                self.assertLess(cal_idx, root_idx)
+
 
 if __name__ == "__main__":
     from django.test.runner import DiscoverRunner

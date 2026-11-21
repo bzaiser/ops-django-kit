@@ -147,12 +147,56 @@ def _auto_wire_kit_in_project(kit_key: str, url_snippet: str) -> list[str]:
         if f"{kit_key}.urls" not in utxt:
             if "include" not in utxt and "from django.urls import" in utxt:
                 utxt = re.sub(r"from django\.urls import ([^\n]+)", lambda r: f"from django.urls import include, {r.group(1)}", utxt, count=1)
-            m = re.search(r"(urlpatterns\s*=\s*\[[\s\S]*?)(\n\])", utxt)
-            if m:
-                new_utxt = utxt[:m.end(1)] + f"\n    {url_snippet}" + utxt[m.start(2):]
+            # Insert before root catchall (e.g. path('', ...)) if present so kit prefix routes take precedence
+            m_catchall = re.search(r"(\n\s*(?:re_)?path\(\s*['\"]['\"],)", utxt)
+            if m_catchall:
+                insert_pos = m_catchall.start(1)
+                new_utxt = utxt[:insert_pos] + f"\n    {url_snippet}" + utxt[insert_pos:]
                 urls_path.write_text(new_utxt, encoding="utf-8")
                 notes.append(f"urls.py: {url_snippet} hinzugefügt.")
+            else:
+                m = re.search(r"(urlpatterns\s*=\s*\[[\s\S]*?)(\n\])", utxt)
+                if m:
+                    new_utxt = utxt[:m.end(1)] + f"\n    {url_snippet}" + utxt[m.start(2):]
+                    urls_path.write_text(new_utxt, encoding="utf-8")
+                    notes.append(f"urls.py: {url_snippet} hinzugefügt.")
     return notes
+
+
+def restart_server_or_container(delay_seconds: float = 1.0):
+    """Gracefully restart web container or Gunicorn master so newly installed
+    kits, settings, and code changes take full effect."""
+    import signal
+    import threading
+    import time
+
+    def _do_restart():
+        time.sleep(delay_seconds)
+        # 1. Gunicorn worker: signal master process if present
+        ppid = os.getppid()
+        if ppid > 1 and hasattr(signal, "SIGHUP"):
+            try:
+                os.kill(ppid, signal.SIGHUP)
+            except Exception:
+                pass
+        # 2. Docker: kill PID 1 so Docker (restart: unless-stopped) does a fresh container reload
+        is_docker = (
+            Path("/.dockerenv").exists()
+            or Path("/opt/ds-pkg").exists()
+            or bool(os.environ.get("RUNNING_IN_DOCKER"))
+        )
+        if is_docker:
+            try:
+                if hasattr(signal, "SIGTERM"):
+                    os.kill(1, signal.SIGTERM)
+                time.sleep(1.0)
+                if hasattr(signal, "SIGKILL"):
+                    os.kill(1, signal.SIGKILL)
+            except Exception:
+                pass
+
+    t = threading.Thread(target=_do_restart, daemon=True)
+    t.start()
 
 
 def install_kit_package(kit_key: str, user=None, reload_gunicorn: bool = True) -> str:
@@ -182,8 +226,10 @@ def install_kit_package(kit_key: str, user=None, reload_gunicorn: bool = True) -
 
     manage_py = Path(getattr(settings, "BASE_DIR", ".")) / "manage.py"
     if manage_py.exists():
+        has_migrate_all = (Path(getattr(settings, "BASE_DIR", ".")) / "core" / "management" / "commands" / "migrate_all.py").exists()
+        mig_subcommand = "migrate_all" if has_migrate_all else "migrate"
         for mcmd in (
-            [sys.executable, str(manage_py), "migrate", "--noinput"],
+            [sys.executable, str(manage_py), mig_subcommand] if mig_subcommand == "migrate_all" else [sys.executable, str(manage_py), mig_subcommand, "--noinput"],
             [sys.executable, str(manage_py), "collectstatic", "--clear", "--noinput"],
         ):
             try:
@@ -193,7 +239,7 @@ def install_kit_package(kit_key: str, user=None, reload_gunicorn: bool = True) -
                 if mp.stderr:
                     out += "\n" + mp.stderr
             except Exception as exc:
-                out += f"\n{mcmd[-2]} Hinweis: {exc}"
+                out += f"\n{mcmd[2]} Hinweis: {exc}"
 
     cfg = UpdateSettings.get_solo()
     cfg.last_status = "updated"
@@ -201,11 +247,8 @@ def install_kit_package(kit_key: str, user=None, reload_gunicorn: bool = True) -
     cfg.save(update_fields=["last_status", "last_log"])
     log_audit(user, "KIT_INSTALLED", target=kit_key, details=out[:500])
 
-    if reload_gunicorn and hasattr(signal, "SIGHUP"):
-        try:
-            os.kill(1, signal.SIGHUP)
-        except Exception:
-            pass
+    if reload_gunicorn:
+        restart_server_or_container()
     return out
 
 
@@ -349,9 +392,20 @@ def apply_nas_updates(cfg: UpdateSettings | None = None, reload_gunicorn: bool =
 
     import io
     import os
-    import signal
     buf = io.StringIO()
+    base_dir = Path(getattr(settings, "BASE_DIR", "."))
     items = (cfg.last_result_json or {}).get("items") or []
+
+    # 1. Update app repo if .git exists and update_available
+    app_item = next((i for i in items if i.get("kind") == "app" and i.get("update_available")), None)
+    if app_item and (base_dir / ".git").is_dir():
+        try:
+            gproc = subprocess.run(["git", "pull", "--ff-only"], cwd=str(base_dir), capture_output=True, text=True, timeout=60)
+            gout = (gproc.stdout or "") + ("\n" + gproc.stderr if gproc.stderr else "")
+            buf.write(f"App Update (git pull):\n{gout}\n")
+        except Exception as exc:
+            buf.write(f"App Update Warnung: {exc}\n")
+
     outdated = [
         i["key"]
         for i in items
@@ -368,7 +422,7 @@ def apply_nas_updates(cfg: UpdateSettings | None = None, reload_gunicorn: bool =
 
     known = dict(cfg.installed_commits_json or {})
     for item in items:
-        if item.get("kind") == "kit" and item.get("remote"):
+        if item.get("remote"):
             known[item["key"]] = item["remote"]
             item["local"] = item["remote"]
             item["update_available"] = False
@@ -382,9 +436,6 @@ def apply_nas_updates(cfg: UpdateSettings | None = None, reload_gunicorn: bool =
     cfg.save()
     log_audit(user, "AUTO_UPDATE_APPLIED", target="all-kits", details=out[:500])
 
-    if reload_gunicorn and hasattr(signal, "SIGHUP"):
-        try:
-            os.kill(1, signal.SIGHUP)
-        except Exception:
-            pass
+    if reload_gunicorn:
+        restart_server_or_container()
     return out
