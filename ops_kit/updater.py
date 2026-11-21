@@ -542,6 +542,19 @@ def apply_nas_updates(cfg: UpdateSettings | None = None, reload_gunicorn: bool =
         _update_progress(cfg, "▶ [2/4] Keine Kit-Updates nötig (alle Baukasten-Kits aktuell).")
     out = buf.getvalue()
 
+    # Rewire: ensure every installed kit has its URL + menu entry wired
+    _update_progress(cfg, "▶ [2b/4] Prüfe URL-Verdrahtung für installierte Kits...")
+    installed_apps = set(getattr(settings, "INSTALLED_APPS", []))
+    for kit_key, (_, url_snippet) in KIT_METADATA.items():
+        if kit_key not in installed_apps or not url_snippet:
+            continue
+        try:
+            notes = _auto_wire_kit_in_project(kit_key, url_snippet)
+            if notes:
+                out += f"\nRewire {kit_key}: " + "; ".join(notes)
+        except Exception as exc:
+            out += f"\nRewire {kit_key} Hinweis: {exc}"
+
     _update_progress(cfg, "▶ [3/4] Führe Datenbank-Migrationen & Asset-Sammlung aus...")
     manage_py = base_dir / "manage.py"
     if manage_py.exists():
