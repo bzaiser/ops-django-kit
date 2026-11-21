@@ -176,17 +176,25 @@ def _auto_wire_kit_in_project(kit_key: str, url_snippet: str) -> list[str]:
     import re
     notes = []
     base_dir = Path(getattr(settings, "BASE_DIR", "."))
-    settings_mod = os.environ.get("DJANGO_SETTINGS_MODULE", "") or ""
+    settings_mod = getattr(settings, "SETTINGS_MODULE", None) or os.environ.get("DJANGO_SETTINGS_MODULE", "") or ""
     if settings_mod:
         settings_path = base_dir.joinpath(*settings_mod.split(".")).with_suffix(".py")
     else:
         settings_path = base_dir / "config" / "settings.py"
+    if not settings_path.exists():
+        candidates = list(base_dir.rglob("settings.py"))
+        if candidates:
+            settings_path = candidates[0]
 
     root_urlconf = str(getattr(settings, "ROOT_URLCONF", "") or "")
     if root_urlconf:
         urls_path = base_dir.joinpath(*root_urlconf.split(".")).with_suffix(".py")
     else:
         urls_path = base_dir / "config" / "urls.py"
+    if not urls_path.exists():
+        candidates = list(base_dir.rglob("urls.py"))
+        if candidates:
+            urls_path = candidates[0]
 
     if settings_path.exists():
         txt = settings_path.read_text(encoding="utf-8")
@@ -241,9 +249,9 @@ def restart_server_or_container(delay_seconds: float = 1.0):
 
     def _do_restart():
         time.sleep(delay_seconds)
-        # 1. Gunicorn worker: signal master process if present
+        # 1. Gunicorn worker: signal master process if present (master is PID 1 in container with exec)
         ppid = os.getppid()
-        if ppid > 1 and hasattr(signal, "SIGHUP"):
+        if ppid >= 1 and hasattr(signal, "SIGHUP"):
             try:
                 os.kill(ppid, signal.SIGHUP)
             except Exception:
