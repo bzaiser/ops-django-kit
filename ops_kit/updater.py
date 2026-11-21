@@ -126,8 +126,34 @@ KIT_METADATA = {
 }
 
 
+def _installed_apps_from_disk() -> set[str]:
+    """Read INSTALLED_APPS from the project's settings.py on disk (not in-memory Django settings)."""
+    import re
+    base_dir = Path(getattr(settings, "BASE_DIR", "."))
+    settings_mod = getattr(settings, "SETTINGS_MODULE", None) or ""
+    if settings_mod:
+        settings_path = base_dir.joinpath(*settings_mod.split(".")).with_suffix(".py")
+    else:
+        settings_path = base_dir / "config" / "settings.py"
+    if not settings_path.exists():
+        # fallback to glob
+        candidates = list(base_dir.rglob("settings.py"))
+        settings_path = candidates[0] if candidates else None
+    if not settings_path or not settings_path.exists():
+        return set()
+    txt = settings_path.read_text(encoding="utf-8")
+    # Extract all quoted strings inside INSTALLED_APPS = [ ... ]
+    m = re.search(r"INSTALLED_APPS\s*=\s*\[([\s\S]*?)\]", txt)
+    if not m:
+        return set()
+    block = m.group(1)
+    return set(re.findall(r"""['"]([^'"]+)['"]""", block))
+
+
 def get_optional_kits_catalog() -> list[dict]:
-    installed_apps = set(getattr(settings, "INSTALLED_APPS", []))
+    installed_apps = _installed_apps_from_disk()
+    # Also merge in-memory (already-loaded apps) to be safe
+    installed_apps |= set(getattr(settings, "INSTALLED_APPS", []))
     catalog = []
     for key, repo in KIT_GITHUB_REPOS.items():
         if key in installed_apps:
