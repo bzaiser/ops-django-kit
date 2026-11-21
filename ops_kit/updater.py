@@ -90,7 +90,7 @@ def _default_fetch_json(url: str, timeout: int = 4) -> dict:
 
 
 def _fetch_remote_head_sha(repo: str, timeout: int = 5) -> str:
-    """Use `git ls-remote` to read main HEAD SHA without GitHub REST API rate limits."""
+    """Read main HEAD SHA via `git ls-remote` with GitHub REST API fallback when `git` is absent."""
     try:
         proc = subprocess.run(
             ["git", "ls-remote", f"https://github.com/{repo}.git", "refs/heads/main"],
@@ -102,6 +102,13 @@ def _fetch_remote_head_sha(repo: str, timeout: int = 5) -> str:
         line = (proc.stdout or "").strip().splitlines()
         if line:
             return line[0].split()[0][:12]
+    except Exception:
+        pass
+    try:
+        data = _default_fetch_json(f"https://api.github.com/repos/{repo}/commits/main", timeout=timeout)
+        sha = str(data.get("sha") or "")[:12]
+        if sha:
+            return sha
     except Exception:
         pass
     return ""

@@ -77,12 +77,29 @@ class Command(BaseCommand):
 
         if updated_commits:
             write_kit_commits(updated_commits, base_dir)
+        all_commits = {**stored, **updated_commits}
+        if all_commits:
             try:
                 cfg = UpdateSettings.get_solo()
                 known = dict(cfg.installed_commits_json or {})
-                known.update(updated_commits)
+                known.update(all_commits)
                 cfg.installed_commits_json = known
-                cfg.save(update_fields=["installed_commits_json"])
+                # Keep cached UI result in sync so /ops/updates/ immediately shows "Aktuell"
+                if isinstance(cfg.last_result_json, dict):
+                    items = list(cfg.last_result_json.get("items") or [])
+                    for item in items:
+                        k = item.get("key")
+                        if k in all_commits:
+                            item["local"] = all_commits[k]
+                            if not item.get("remote") or item.get("remote") == all_commits[k]:
+                                item["remote"] = all_commits[k]
+                                item["update_available"] = False
+                    has_more = any(i.get("update_available") for i in items)
+                    cfg.last_result_json["items"] = items
+                    cfg.last_result_json["has_updates"] = has_more
+                    if not has_more:
+                        cfg.last_status = "ok"
+                cfg.save(update_fields=["installed_commits_json", "last_result_json", "last_status"])
             except Exception:
                 pass
 
