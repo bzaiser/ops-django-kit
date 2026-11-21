@@ -12,10 +12,14 @@ from django.utils import timezone
 
 from .models import UpdateSettings, log_audit
 from .runtime import (
+    CORE_PROTECTED_KITS,
     add_runtime_kit,
+    disable_runtime_kit,
     get_kit_target_dir,
+    load_disabled_kits,
     load_runtime_kits,
     read_kit_commits,
+    remove_kit_commit,
     write_kit_commits,
 )
 
@@ -123,9 +127,19 @@ def should_run_startup_check(cfg: UpdateSettings) -> bool:
     return timezone.now() >= cfg.last_checked_at + timedelta(hours=interval)
 
 
+def get_protected_kits() -> set[str]:
+    extra = getattr(settings, "OPS_REQUIRED_KITS", ()) or ()
+    return set(CORE_PROTECTED_KITS) | {str(k).strip() for k in extra if str(k).strip()}
+
+
 def active_kit_repos() -> list[tuple[str, str]]:
     base_dir = Path(getattr(settings, "BASE_DIR", "."))
-    installed = _installed_apps_from_disk() | set(getattr(settings, "INSTALLED_APPS", [])) | set(load_runtime_kits(base_dir))
+    disabled = set(load_disabled_kits(base_dir)) - get_protected_kits()
+    installed = (
+        _installed_apps_from_disk()
+        | set(getattr(settings, "INSTALLED_APPS", []))
+        | set(load_runtime_kits(base_dir))
+    ) - disabled
     return [(k, repo) for k, repo in KIT_GITHUB_REPOS.items() if k in installed]
 
 
@@ -167,7 +181,12 @@ def _installed_apps_from_disk() -> set[str]:
 
 def get_optional_kits_catalog() -> list[dict]:
     base_dir = Path(getattr(settings, "BASE_DIR", "."))
-    installed_apps = _installed_apps_from_disk() | set(getattr(settings, "INSTALLED_APPS", [])) | set(load_runtime_kits(base_dir))
+    disabled = set(load_disabled_kits(base_dir)) - get_protected_kits()
+    installed_apps = (
+        _installed_apps_from_disk()
+        | set(getattr(settings, "INSTALLED_APPS", []))
+        | set(load_runtime_kits(base_dir))
+    ) - disabled
     catalog = []
     for key, repo in KIT_GITHUB_REPOS.items():
         if key in installed_apps:
@@ -180,6 +199,7 @@ def get_optional_kits_catalog() -> list[dict]:
             "repo": repo,
             "pip_installed": pip_installed,
             "url_snippet": url_snippet,
+            "was_disabled": key in disabled,
         })
     return catalog
 
@@ -388,6 +408,75 @@ def install_kit_package(kit_key: str, user=None, reload_gunicorn: bool = True, p
     cfg.last_log = f"{cfg.last_log}\n\nDetail-Protokoll:\n{out}"[-4000:]
     cfg.save(update_fields=["last_status", "last_log"])
     log_audit(user, "KIT_INSTALLED", target=kit_key, details=out[:500])
+
+    if reload_gunicorn:
+        restart_server_or_container()
+    return out
+
+
+def remove_kit_package(kit_key: str, purge_db: bool = False, user=None, reload_gunicorn: bool = True) -> str:
+    """Persistently deactivate/remove an optional Baukasten kit via data/installed_kits.json."""
+    if kit_key not in KIT_GITHUB_REPOS:
+        raise ValueError(f"Unbekanntes Kit: {kit_key}")
+    protected = get_protected_kits()
+    if kit_key in protected:
+        raise ValueError(f"Basis-Kit '{kit_key}' kann nicht entfernt werden.")
+    if is_desktop_frozen():
+        return "Desktop-Modus (.exe): Entfernen im Bundle nicht unterstützt."
+
+    base_dir = Path(getattr(settings, "BASE_DIR", "."))
+    cfg = UpdateSettings.get_solo()
+    notes: list[str] = []
+
+    if purge_db:
+        _update_progress(cfg, f"▶ [1/2] Entferne Datenbank-Tabellen von '{kit_key}' (migrate zero)...")
+        manage_py = base_dir / "manage.py"
+        if manage_py.exists():
+            purge_code = (
+                "from django.core.management import call_command\n"
+                f"call_command('migrate', {repr(kit_key)}, 'zero', database='default', interactive=False)\n"
+                "try:\n"
+                "    from core.models import Tenant\n"
+                "    from core.router import register_tenant_db\n"
+                "    for t in Tenant.objects.using('default').all():\n"
+                "        db = register_tenant_db(t.slug)\n"
+                f"        call_command('migrate', {repr(kit_key)}, 'zero', database=db, interactive=False)\n"
+                "except Exception:\n"
+                "    pass\n"
+            )
+            try:
+                proc = subprocess.run(
+                    [sys.executable, str(manage_py), "shell", "-c", purge_code],
+                    capture_output=True,
+                    text=True,
+                    stdin=subprocess.DEVNULL,
+                    timeout=120,
+                )
+                if proc.stdout:
+                    notes.append(proc.stdout.strip())
+                if proc.stderr:
+                    notes.append(proc.stderr.strip())
+            except Exception as exc:
+                notes.append(f"DB-Cleanup Hinweis: {exc}")
+
+    _update_progress(cfg, f"▶ [2/2] Deaktiviere '{kit_key}' persistent in data/installed_kits.json...")
+    disable_runtime_kit(kit_key, base_dir, protected=protected)
+    remove_kit_commit(kit_key, base_dir)
+    notes.append(f"'{kit_key}' in data/installed_kits.json deaktiviert (settings.py bleibt unverändert).")
+
+    cfg = UpdateSettings.get_solo()
+    known = dict(cfg.installed_commits_json or {})
+    known.pop(kit_key, None)
+    cfg.installed_commits_json = known
+    if isinstance(cfg.last_result_json, dict):
+        items = [i for i in (cfg.last_result_json.get("items") or []) if i.get("key") != kit_key]
+        cfg.last_result_json["items"] = items
+        cfg.last_result_json["has_updates"] = any(i.get("update_available") for i in items)
+    cfg.last_status = "updated"
+    out = "\n".join(n for n in notes if n)
+    cfg.last_log = f"Kit '{kit_key}' entfernt. Server startet neu...\n{out}"[-4000:]
+    cfg.save(update_fields=["installed_commits_json", "last_result_json", "last_status", "last_log"])
+    log_audit(user, "KIT_REMOVED", target=kit_key, details=f"purge_db={purge_db}; {out[:400]}")
 
     if reload_gunicorn:
         restart_server_or_container()

@@ -189,7 +189,15 @@
                     </div>
                 </div>
             </div>
-            <div class="d-flex justify-content-end mt-3">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mt-3">
+                {% if domain_removable and not is_desktop %}
+                <button type="button" class="btn btn-sm btn-outline-danger rounded-pill px-3 js-ops-remove-kit-btn"
+                        data-kit-key="domain_kit" data-kit-label="{% trans 'Stammdaten / Domain Kit' %}">
+                    <i class="bi bi-trash me-1"></i> {% trans "Domain-Kit entfernen…" %}
+                </button>
+                {% else %}
+                <span></span>
+                {% endif %}
                 <button type="submit" class="btn btn-sm btn-primary rounded-pill px-4 fw-bold">
                     <i class="bi bi-check2-circle me-1"></i> {% trans "Haken & Teilbereiche speichern" %}
                 </button>
@@ -198,11 +206,40 @@
     </div>
 </div>
 {% endif %}
+{% if installed_kits and not is_desktop %}
+<div class="card shadow-sm mt-3">
+    <div class="card-header fw-bold d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <span><i class="bi bi-check2-square me-1"></i> {% trans "Aktive Baukasten-Kits" %}</span>
+        <span class="small text-muted fw-normal">{% trans "Optionale Kits lassen sich persistent deaktivieren (data/installed_kits.json)" %}</span>
+    </div>
+    <div class="card-body py-2">
+        <div class="d-flex flex-wrap gap-2">
+            {% for ik in installed_kits %}
+            <div class="d-inline-flex align-items-center gap-2 border rounded-pill px-3 py-1 bg-body-tertiary">
+                <span class="small fw-semibold">{{ ik.label }}</span>
+                <span class="small text-muted font-monospace">{{ ik.key }}</span>
+                {% if ik.removable %}
+                <button type="button" class="btn btn-sm btn-link text-danger p-0 ms-1 js-ops-remove-kit-btn"
+                        data-kit-key="{{ ik.key }}" data-kit-label="{{ ik.label }}"
+                        title="{% trans 'Kit entfernen / deaktivieren' %}">
+                    <i class="bi bi-x-circle-fill"></i>
+                </button>
+                {% else %}
+                <span class="badge bg-secondary bg-opacity-25 text-body rounded-pill" title="{% trans 'Basis-Kit (geschützt)' %}">
+                    <i class="bi bi-lock-fill"></i>
+                </span>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endif %}
 {% if optional_kits and not is_desktop %}
 <div class="card shadow-sm mt-3">
     <div class="card-header fw-bold d-flex justify-content-between align-items-center">
-        <span><i class="bi bi-puzzle me-1"></i> {% trans "Weitere Baukasten-Kits nachinstallieren" %}</span>
-        <span class="small text-muted fw-normal">{% trans "Installiert, aktiviert (settings.py & urls.py), migriert und lädt automatisch neu" %}</span>
+        <span><i class="bi bi-puzzle me-1"></i> {% trans "Weitere Baukasten-Kits nachinstallieren / aktivieren" %}</span>
+        <span class="small text-muted fw-normal">{% trans "Installiert nach /opt/ds-pkg, aktiviert über data/installed_kits.json, migriert und lädt neu" %}</span>
     </div>
     <div class="table-responsive">
         <table class="table table-hover align-middle mb-0">
@@ -222,8 +259,10 @@
                         <div class="small text-muted font-monospace">{{ ok.repo }}</div>
                     </td>
                     <td>
-                        {% if ok.pip_installed %}
-                        <span class="badge bg-info text-dark">{% trans "Paket installiert (nicht in INSTALLED_APPS)" %}</span>
+                        {% if ok.was_disabled %}
+                        <span class="badge bg-secondary">{% trans "Deaktiviert" %}</span>
+                        {% elif ok.pip_installed %}
+                        <span class="badge bg-info text-dark">{% trans "Paket vorhanden (inaktiv)" %}</span>
                         {% else %}
                         <span class="badge bg-secondary bg-opacity-50">{% trans "Nicht installiert" %}</span>
                         {% endif %}
@@ -249,7 +288,7 @@
                             </div>
                             {% endif %}
                             <button type="submit" class="btn btn-sm btn-outline-primary rounded-pill px-3 text-nowrap">
-                                <i class="bi bi-plus-circle me-1"></i> {% if ok.pip_installed %}{% trans "Aktualisieren" %}{% else %}{% trans "Nachinstallieren" %}{% endif %}
+                                <i class="bi bi-plus-circle me-1"></i> {% if ok.was_disabled or ok.pip_installed %}{% trans "Aktivieren" %}{% else %}{% trans "Nachinstallieren" %}{% endif %}
                             </button>
                         </form>
                     </td>
@@ -271,8 +310,65 @@
     <pre id="ops-last-log-pre" class="mb-0 p-3 small font-monospace" style="max-height: 260px; overflow: auto; white-space: pre-wrap;">{{ cfg.last_log }}</pre>
 </div>
 {% endif %}
+{% if not is_desktop %}
+<div class="modal fade" id="opsRemoveKitModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <form method="post" action="{% url 'ops_kit:updates' %}" class="modal-content js-ops-update-form" data-progress-text="{% trans 'Entferne Kit und starte Server neu — bitte warten...' %}">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="remove_kit">
+            <input type="hidden" name="kit_key" id="opsRemoveKitKey" value="">
+            {% if ops_updates_next %}<input type="hidden" name="next" value="{{ ops_updates_next }}">{% endif %}
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-trash text-danger me-1"></i> {% trans "Kit entfernen / deaktivieren" %}</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="{% trans 'Schließen' %}"></button>
+            </div>
+            <div class="modal-body">
+                <p class="mb-2">
+                    {% trans "Soll" %} <strong id="opsRemoveKitLabel"></strong> (<code id="opsRemoveKitKeyText"></code>) {% trans "persistent aus dieser App deaktiviert werden?" %}
+                </p>
+                <p class="small text-muted mb-3">
+                    {% trans "Navigation, Routen und Update-Prüfungen für dieses Kit verschwinden nach dem automatischen Neustart. Es kann jederzeit wieder aktiviert werden." %}
+                </p>
+                <div class="form-check p-2 border border-danger border-opacity-25 rounded bg-danger bg-opacity-10">
+                    <input class="form-check-input ms-1" type="checkbox" name="purge_db" value="1" id="opsRemovePurgeDb">
+                    <label class="form-check-label small ps-2" for="opsRemovePurgeDb">
+                        <strong>{% trans "Datenbank-Tabellen ebenfalls löschen (migrate zero)" %}</strong>
+                        <div class="text-muted">{% trans "Standardmäßig bleiben alle Daten erhalten. Nur aktivieren, wenn Daten dauerhaft entfernt werden sollen." %}</div>
+                    </label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-sm btn-outline-secondary rounded-pill px-3" data-bs-dismiss="modal">{% trans "Abbrechen" %}</button>
+                <button type="submit" class="btn btn-sm btn-danger rounded-pill px-4 fw-bold">
+                    <i class="bi bi-trash me-1"></i> {% trans "Jetzt entfernen" %}
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
 <script>
 document.addEventListener('DOMContentLoaded', function () {
+    var removeModalEl = document.getElementById('opsRemoveKitModal');
+    if (removeModalEl) {
+        document.querySelectorAll('.js-ops-remove-kit-btn').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var key = btn.dataset.kitKey || '';
+                var label = btn.dataset.kitLabel || key;
+                var keyInput = document.getElementById('opsRemoveKitKey');
+                var keyText = document.getElementById('opsRemoveKitKeyText');
+                var labelEl = document.getElementById('opsRemoveKitLabel');
+                var purgeCb = document.getElementById('opsRemovePurgeDb');
+                if (keyInput) keyInput.value = key;
+                if (keyText) keyText.textContent = key;
+                if (labelEl) labelEl.textContent = label;
+                if (purgeCb) purgeCb.checked = false;
+                if (typeof bootstrap !== 'undefined') {
+                    bootstrap.Modal.getOrCreateInstance(removeModalEl).show();
+                }
+            });
+        });
+    }
     var box = document.getElementById('ops-update-progress');
     var txt = document.getElementById('ops-update-progress-text');
     document.querySelectorAll('.js-ops-update-form').forEach(function (form) {

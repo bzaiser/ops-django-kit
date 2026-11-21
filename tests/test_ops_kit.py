@@ -268,6 +268,59 @@ class OpsKitTests(TestCase):
                 else:
                     os.environ["DESIGN_STUDIO_TARGET"] = old_target
 
+    def test_remove_and_reactivate_kit_with_protection(self):
+        from ops_kit.runtime import (
+            add_runtime_kit,
+            apply_runtime_installed_apps,
+            disable_runtime_kit,
+            filter_runtime_context_processors,
+            load_disabled_kits,
+            optional_kit_path,
+        )
+        from ops_kit.updater import get_optional_kits_catalog, remove_kit_package
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            # Protected kits cannot be disabled
+            self.assertFalse(disable_runtime_kit("design_studio", tmp_path))
+            self.assertFalse(disable_runtime_kit("ops_kit", tmp_path))
+            self.assertFalse(disable_runtime_kit("grid_kit", tmp_path, protected={"grid_kit"}))
+
+            # Optional kit can be disabled and disappears from INSTALLED_APPS
+            self.assertTrue(disable_runtime_kit("cal_kit", tmp_path))
+            self.assertIn("cal_kit", load_disabled_kits(tmp_path))
+            apps = ["design_studio", "ops_kit", "cal_kit", "domain_kit"]
+            apply_runtime_installed_apps(apps, tmp_path)
+            self.assertNotIn("cal_kit", apps)
+            self.assertIn("domain_kit", apps)
+
+            # Context processors for disabled kits are filtered out
+            cps = [
+                "design_studio.context_processors.theme_context",
+                "domain_kit.context_processors.domain_context",
+                "notify_kit.context_processors.notify_context",
+            ]
+            filtered = filter_runtime_context_processors(cps, apps)
+            self.assertIn("domain_kit.context_processors.domain_context", filtered)
+            self.assertNotIn("notify_kit.context_processors.notify_context", filtered)
+
+            # optional_kit_path returns [] for inactive kit and [path] for active kit
+            self.assertEqual(optional_kit_path("cal_kit", "calendar/", "cal_kit.urls"), [])
+            self.assertEqual(len(optional_kit_path("ops_kit", "ops/", "ops_kit.urls")), 1)
+
+            # remove_kit_package marks kit disabled and shows it as was_disabled in catalog
+            with self.settings(BASE_DIR=tmp_path):
+                with self.assertRaises(ValueError):
+                    remove_kit_package("ops_kit", reload_gunicorn=False)
+                remove_kit_package("domain_kit", purge_db=False, user=self.staff, reload_gunicorn=False)
+                self.assertIn("domain_kit", load_disabled_kits(tmp_path))
+                catalog = {c["key"]: c for c in get_optional_kits_catalog()}
+                self.assertTrue(catalog["domain_kit"]["was_disabled"])
+
+                # Reactivating clears disabled state
+                add_runtime_kit("domain_kit", tmp_path)
+                self.assertNotIn("domain_kit", load_disabled_kits(tmp_path))
+
     def test_no_missing_migrations(self):
         call_command("makemigrations", "ops_kit", "--check", "--dry-run", verbosity=0)
 
