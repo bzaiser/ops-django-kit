@@ -17,7 +17,7 @@
             </button>
         </form>
         {% if not is_desktop %}
-        <form method="post" action="{% url 'ops_kit:updates' %}" class="d-inline js-ops-update-form" data-progress-text="{% trans 'Installiere Kits von GitHub und lade Server neu — bitte warten...' %}">
+        <form method="post" action="{% url 'ops_kit:updates' %}" class="d-inline js-ops-update-form" data-progress-text="{% trans 'Update wird durchgeführt und Server neu geladen — bitte warten...' %}">
             {% csrf_token %}
             <input type="hidden" name="action" value="apply_now">
             {% if ops_updates_next %}<input type="hidden" name="next" value="{{ ops_updates_next }}">{% endif %}
@@ -32,7 +32,7 @@
 <div id="ops-update-progress" {% if cfg.last_status == 'running' %}data-ops-running="1"{% endif %} class="alert alert-info {% if cfg.last_status != 'running' %}d-none{% endif %} mb-3" role="status">
     <div class="d-flex align-items-center gap-2 mb-2 fw-semibold">
         <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
-        <span id="ops-update-progress-text">{% if cfg.last_status == 'running' %}{% trans "Update läuft im Hintergrund (Kits installieren, migrate, collectstatic)..." %}{% else %}{% trans "Bitte warten..." %}{% endif %}</span>
+        <span id="ops-update-progress-text">{% if cfg.last_status == 'running' %}{% trans "Update läuft im Hintergrund — bitte warten..." %}{% else %}{% trans "Bitte warten..." %}{% endif %}</span>
     </div>
     <div class="progress" style="height: 8px;">
         <div class="progress-bar progress-bar-striped progress-bar-animated w-100"></div>

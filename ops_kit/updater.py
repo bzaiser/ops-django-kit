@@ -471,19 +471,27 @@ def apply_nas_updates(cfg: UpdateSettings | None = None, reload_gunicorn: bool =
     else:
         _update_progress(cfg, "▶ [1/4] App-Code ist aktuell.")
 
-    _update_progress(cfg, "▶ [2/4] Lade und aktualisiere Baukasten-Kits von GitHub...")
     outdated = [
         i["key"]
         for i in items
         if i.get("kind") == "kit" and i.get("update_available") and i.get("key") in KIT_GITHUB_REPOS
     ]
-    active_keys = [k for k, _ in active_kit_repos()]
-    if outdated and len(outdated) < len(active_keys):
+    if outdated:
+        _update_progress(cfg, f"▶ [2/4] Lade Baukasten-Kits von GitHub ({', '.join(outdated)})...")
         for k in outdated:
             repo_url = f"https://github.com/{KIT_GITHUB_REPOS[k]}/archive/refs/heads/main.zip"
-            call_command("design_studio_update", repo=repo_url, all_kits=False, reload_gunicorn=False, skip_migrate=(k != outdated[-1]), skip_collectstatic=(k != outdated[-1]), stdout=buf, stderr=buf)
+            call_command(
+                "design_studio_update",
+                repo=repo_url,
+                all_kits=False,
+                reload_gunicorn=False,
+                skip_migrate=(k != outdated[-1]),
+                skip_collectstatic=(k != outdated[-1]),
+                stdout=buf,
+                stderr=buf,
+            )
     else:
-        call_command("design_studio_update", all_kits=True, reload_gunicorn=False, stdout=buf, stderr=buf)
+        _update_progress(cfg, "▶ [2/4] Keine Kit-Updates nötig (alle Baukasten-Kits aktuell).")
     out = buf.getvalue()
 
     _update_progress(cfg, "▶ [3/4] Führe Datenbank-Migrationen & Asset-Sammlung aus...")

@@ -85,7 +85,10 @@ def updates_view(request):
                 messages.info(request, "Update läuft bereits im Hintergrund.")
             else:
                 cfg.last_status = "running"
-                cfg.last_log = "Update gestartet — lade Kits von GitHub..."
+                items = (cfg.last_result_json or {}).get("items") or []
+                upd_targets = [i.get("repo", i.get("key")) for i in items if i.get("update_available")]
+                target_str = ", ".join(upd_targets) if upd_targets else "App & Pakete"
+                cfg.last_log = f"Update gestartet ({target_str}) — bitte warten..."
                 cfg.save(update_fields=["last_status", "last_log"])
                 user_id = getattr(request.user, "pk", None)
 
