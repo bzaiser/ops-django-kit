@@ -126,6 +126,78 @@
         </div>
     </div>
 </div>
+{% if domain_installed %}
+<div class="card shadow-sm mt-3">
+    <div class="card-header fw-bold d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <span><i class="bi bi-tags me-1"></i> {% trans "Stammdaten / Domain Kit — Aktive Teilbereiche" %}</span>
+        <a href="/domain/settings/" class="btn btn-sm btn-outline-secondary rounded-pill px-3">
+            <i class="bi bi-box-arrow-up-right me-1"></i> {% trans "Stammdaten & Schaltzentrale öffnen" %}
+        </a>
+    </div>
+    <div class="card-body">
+        <form method="post" action="{% url 'ops_kit:updates' %}">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="save_domain_modules">
+            {% if ops_updates_next %}<input type="hidden" name="next" value="{{ ops_updates_next }}">{% endif %}
+            <p class="small text-muted mb-3">
+                {% trans "Wählen Sie mit Haken aus, welche Stammdaten-Bereiche aktiv sein sollen. Aktive Module erscheinen automatisch in der Navigation." %}
+            </p>
+            <div class="row g-2">
+                <div class="col-12 col-md-6 col-lg">
+                    <div class="form-check p-2 border rounded bg-body-tertiary">
+                        <input class="form-check-input ms-1" type="checkbox" name="domain_modules" value="master_data" id="mod_master_data" {% if domain_modules.master_data %}checked{% endif %}>
+                        <label class="form-check-label fw-semibold ps-2" for="mod_master_data">
+                            <i class="bi bi-tags text-primary me-1"></i> {% trans "Stammdaten-Basis" %}
+                            <div class="small fw-normal text-muted">{% trans "Kategorien, Status, Maßeinheiten, Rollen" %}</div>
+                        </label>
+                    </div>
+                </div>
+                <div class="col-12 col-md-6 col-lg">
+                    <div class="form-check p-2 border rounded bg-body-tertiary">
+                        <input class="form-check-input ms-1" type="checkbox" name="domain_modules" value="persons" id="mod_persons" {% if domain_modules.persons %}checked{% endif %}>
+                        <label class="form-check-label fw-semibold ps-2" for="mod_persons">
+                            <i class="bi bi-people text-success me-1"></i> {% trans "Personen & Adressen" %}
+                            <div class="small fw-normal text-muted">{% trans "Kontakte, Kunden, Lieferanten, Adressbuch" %}</div>
+                        </label>
+                    </div>
+                </div>
+                <div class="col-12 col-md-6 col-lg">
+                    <div class="form-check p-2 border rounded bg-body-tertiary">
+                        <input class="form-check-input ms-1" type="checkbox" name="domain_modules" value="documents" id="mod_documents" {% if domain_modules.documents %}checked{% endif %}>
+                        <label class="form-check-label fw-semibold ps-2" for="mod_documents">
+                            <i class="bi bi-folder2-open text-warning me-1"></i> {% trans "Dokumente" %}
+                            <div class="small fw-normal text-muted">{% trans "Uploads, Volltextsuche, Belege" %}</div>
+                        </label>
+                    </div>
+                </div>
+                <div class="col-12 col-md-6 col-lg">
+                    <div class="form-check p-2 border rounded bg-body-tertiary">
+                        <input class="form-check-input ms-1" type="checkbox" name="domain_modules" value="assets" id="mod_assets" {% if domain_modules.assets %}checked{% endif %}>
+                        <label class="form-check-label fw-semibold ps-2" for="mod_assets">
+                            <i class="bi bi-boxes text-info me-1"></i> {% trans "Assets & Inventar" %}
+                            <div class="small fw-normal text-muted">{% trans "Geräte, Verträge, Konten" %}</div>
+                        </label>
+                    </div>
+                </div>
+                <div class="col-12 col-md-6 col-lg">
+                    <div class="form-check p-2 border rounded bg-body-tertiary">
+                        <input class="form-check-input ms-1" type="checkbox" name="domain_modules" value="global_search" id="mod_global_search" {% if domain_modules.global_search %}checked{% endif %}>
+                        <label class="form-check-label fw-semibold ps-2" for="mod_global_search">
+                            <i class="bi bi-search text-secondary me-1"></i> {% trans "Globale Suche" %}
+                            <div class="small fw-normal text-muted">{% trans "Suchmaske über alle aktiven Bereiche" %}</div>
+                        </label>
+                    </div>
+                </div>
+            </div>
+            <div class="d-flex justify-content-end mt-3">
+                <button type="submit" class="btn btn-sm btn-primary rounded-pill px-4 fw-bold">
+                    <i class="bi bi-check2-circle me-1"></i> {% trans "Haken & Teilbereiche speichern" %}
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
 {% if optional_kits and not is_desktop %}
 <div class="card shadow-sm mt-3">
     <div class="card-header fw-bold d-flex justify-content-between align-items-center">
@@ -167,13 +239,14 @@
                             <input type="hidden" name="kit_key" value="{{ ok.key }}">
                             {% if ops_updates_next %}<input type="hidden" name="next" value="{{ ops_updates_next }}">{% endif %}
                             {% if ok.key == 'domain_kit' %}
-                            <select name="profile" class="form-select form-select-sm rounded-pill" style="width: auto; max-width: 170px;" title="{% trans 'Modul-Bereich / Profil' %}">
-                                <option value="all">{% trans "Vollständig (Alle)" %}</option>
-                                <option value="persons">{% trans "Nur Personen" %}</option>
-                                <option value="documents">{% trans "Nur Dokumente" %}</option>
-                                <option value="assets">{% trans "Nur Assets" %}</option>
-                                <option value="master_data">{% trans "Nur Stammdaten" %}</option>
-                            </select>
+                            <div class="d-inline-flex flex-wrap gap-2 align-items-center text-start me-2 border rounded-pill px-3 py-1 bg-body-tertiary">
+                                <span class="small fw-semibold text-muted">{% trans "Bereiche:" %}</span>
+                                <label class="small mb-0" title="{% trans 'Kategorien, Status, Einheiten' %}"><input type="checkbox" name="domain_modules" value="master_data" class="form-check-input me-1" checked> {% trans "Stammdaten" %}</label>
+                                <label class="small mb-0" title="{% trans 'Personen & Kontakte' %}"><input type="checkbox" name="domain_modules" value="persons" class="form-check-input me-1"> {% trans "Personen" %}</label>
+                                <label class="small mb-0" title="{% trans 'Dokumente' %}"><input type="checkbox" name="domain_modules" value="documents" class="form-check-input me-1"> {% trans "Dokumente" %}</label>
+                                <label class="small mb-0" title="{% trans 'Assets & Verträge' %}"><input type="checkbox" name="domain_modules" value="assets" class="form-check-input me-1"> {% trans "Assets" %}</label>
+                                <label class="small mb-0" title="{% trans 'Globale Suche' %}"><input type="checkbox" name="domain_modules" value="global_search" class="form-check-input me-1"> {% trans "Suche" %}</label>
+                            </div>
                             {% endif %}
                             <button type="submit" class="btn btn-sm btn-outline-primary rounded-pill px-3 text-nowrap">
                                 <i class="bi bi-plus-circle me-1"></i> {% if ok.pip_installed %}{% trans "Aktualisieren" %}{% else %}{% trans "Nachinstallieren" %}{% endif %}

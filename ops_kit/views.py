@@ -113,7 +113,11 @@ def updates_view(request):
                 messages.info(request, "Update läuft im Hintergrund — Seite aktualisiert sich automatisch.")
         elif action == "install_kit":
             kit_key = (request.POST.get("kit_key") or "").strip()
-            profile = (request.POST.get("profile") or "all").strip()
+            mods = request.POST.getlist("domain_modules")
+            if kit_key == "domain_kit" and mods:
+                profile = ",".join(mods)
+            else:
+                profile = (request.POST.get("profile") or "all").strip()
             if is_desktop_frozen():
                 messages.info(request, "Nachinstallation im Desktop-Modus (.exe) nicht verfügbar.")
             elif cfg.last_status == "running" and _is_update_thread_alive():
@@ -143,6 +147,28 @@ def updates_view(request):
                 _UPDATE_THREAD = threading.Thread(target=_bg_install, daemon=True)
                 _UPDATE_THREAD.start()
                 messages.info(request, f"Installiere {kit_key} im Hintergrund — Seite aktualisiert sich automatisch.")
+        elif action == "save_domain_modules":
+            try:
+                from django.apps import apps
+                if apps.is_installed("domain_kit"):
+                    DMS = apps.get_model("domain_kit", "DomainModuleSettings")
+                    solo = DMS.get_solo()
+                    mods = request.POST.getlist("domain_modules")
+                    solo.enable_master_data = "master_data" in mods
+                    solo.enable_persons = "persons" in mods
+                    solo.enable_addresses = "persons" in mods
+                    solo.enable_documents = "documents" in mods
+                    solo.enable_assets = "assets" in mods
+                    solo.enable_inventory = "assets" in mods
+                    solo.enable_contracts = "assets" in mods
+                    solo.enable_accounts = "assets" in mods
+                    solo.enable_global_search = "global_search" in mods
+                    solo.save()
+                    messages.success(request, "Stammdaten-Teilbereiche erfolgreich gespeichert.")
+                else:
+                    messages.warning(request, "Domain-Kit ist nicht installiert.")
+            except Exception as exc:
+                messages.error(request, f"Fehler beim Speichern der Teilbereiche: {exc}")
         next_url = (request.POST.get("next") or "").strip()
         if next_url and url_has_allowed_host_and_scheme(next_url, allowed_hosts={request.get_host()}):
             return redirect(next_url)
@@ -154,12 +180,33 @@ def updates_view(request):
 def get_updates_context():
     cfg = UpdateSettings.get_solo()
     result = cfg.last_result_json or {}
+    domain_installed = "domain_kit" in set(getattr(settings, "INSTALLED_APPS", []))
+    domain_modules = None
+    if domain_installed:
+        try:
+            from django.apps import apps
+            if apps.is_installed("domain_kit"):
+                DMS = apps.get_model("domain_kit", "DomainModuleSettings")
+                if DMS and hasattr(DMS, "get_solo"):
+                    solo = DMS.get_solo()
+                    domain_modules = {
+                        "master_data": bool(solo.enable_master_data),
+                        "persons": bool(solo.enable_persons),
+                        "documents": bool(solo.enable_documents),
+                        "assets": bool(solo.enable_assets),
+                        "global_search": bool(solo.enable_global_search),
+                    }
+        except Exception:
+            domain_modules = None
+
     return {
         "cfg": cfg,
         "items": result.get("items") or [],
         "has_updates": bool(result.get("has_updates")),
         "is_desktop": is_desktop_frozen(),
         "optional_kits": get_optional_kits_catalog(),
+        "domain_installed": domain_installed,
+        "domain_modules": domain_modules,
     }
 
 

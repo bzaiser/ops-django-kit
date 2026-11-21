@@ -189,6 +189,20 @@ def _auto_wire_kit_in_project(kit_key: str, url_snippet: str) -> list[str]:
                     new_utxt = utxt[:m.end(1)] + f"\n    {url_snippet}" + utxt[m.start(2):]
                     urls_path.write_text(new_utxt, encoding="utf-8")
                     notes.append(f"urls.py: {url_snippet} hinzugefügt.")
+
+    if kit_key == "domain_kit" and settings_path.exists():
+        stxt = settings_path.read_text(encoding="utf-8")
+        if "DESIGN_STUDIO_MENU_ITEMS" in stxt and "domain_kit:" not in stxt:
+            domain_menu = """    {"id": "master_data", "url_name": "domain_kit:settings", "match_urls": ["settings"], "default_label": "Stammdaten", "icon": "bi-tags", "zone": "main", "display": "icon_text", "visible": True, "order": 10},
+    {"id": "persons", "url_name": "domain_kit:persons", "match_urls": ["persons"], "default_label": "Personen", "icon": "bi-people", "zone": "main", "display": "icon_text", "visible": True, "order": 11},
+    {"id": "assets", "url_name": "domain_kit:assets", "match_urls": ["assets"], "default_label": "Assets", "icon": "bi-boxes", "zone": "main", "display": "icon_text", "visible": True, "order": 12},
+    {"id": "documents", "url_name": "domain_kit:documents", "match_urls": ["documents"], "default_label": "Dokumente", "icon": "bi-folder2-open", "zone": "main", "display": "icon_text", "visible": True, "order": 13},
+    {"id": "search", "url_name": "domain_kit:search", "match_urls": ["search"], "default_label": "Suche", "icon": "bi-search", "zone": "main", "display": "icon_text", "visible": True, "order": 14},"""
+            m_menu = re.search(r"(DESIGN_STUDIO_MENU_ITEMS\s*=\s*\[[\s\S]*?)(\n\])", stxt)
+            if m_menu:
+                new_stxt = stxt[:m_menu.end(1)] + "\n" + domain_menu + stxt[m_menu.start(2):]
+                settings_path.write_text(new_stxt, encoding="utf-8")
+                notes.append("settings.py: Domain-Kit Menüeinträge zu DESIGN_STUDIO_MENU_ITEMS hinzugefügt.")
     return notes
 
 
