@@ -113,13 +113,14 @@ def updates_view(request):
                 messages.info(request, "Update läuft im Hintergrund — Seite aktualisiert sich automatisch.")
         elif action == "install_kit":
             kit_key = (request.POST.get("kit_key") or "").strip()
+            profile = (request.POST.get("profile") or "all").strip()
             if is_desktop_frozen():
                 messages.info(request, "Nachinstallation im Desktop-Modus (.exe) nicht verfügbar.")
             elif cfg.last_status == "running" and _is_update_thread_alive():
                 messages.info(request, "Ein Installationsvorgang läuft bereits im Hintergrund.")
             else:
                 cfg.last_status = "running"
-                cfg.last_log = f"Installiere {kit_key} von GitHub..."
+                cfg.last_log = f"Installiere {kit_key} (Profil: {profile}) von GitHub..."
                 cfg.save(update_fields=["last_status", "last_log"])
                 user_id = getattr(request.user, "pk", None)
 
@@ -127,7 +128,7 @@ def updates_view(request):
                     try:
                         from django.contrib.auth import get_user_model
                         u = get_user_model().objects.filter(pk=user_id).first() if user_id else None
-                        install_kit_package(kit_key, user=u)
+                        install_kit_package(kit_key, user=u, profile=profile)
                     except Exception as exc:
                         try:
                             c = UpdateSettings.get_solo()

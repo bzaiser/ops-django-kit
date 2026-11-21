@@ -228,7 +228,7 @@ def restart_server_or_container(delay_seconds: float = 1.0):
     t.start()
 
 
-def install_kit_package(kit_key: str, user=None, reload_gunicorn: bool = True) -> str:
+def install_kit_package(kit_key: str, user=None, reload_gunicorn: bool = True, profile: str = "all") -> str:
     if kit_key not in KIT_GITHUB_REPOS:
         raise ValueError(f"Unbekanntes Kit: {kit_key}")
     if is_desktop_frozen():
@@ -272,6 +272,14 @@ def install_kit_package(kit_key: str, user=None, reload_gunicorn: bool = True) -
                     out += "\n" + mp.stderr
             except Exception as exc:
                 out += f"\n{mcmd[2]} Hinweis: {exc}"
+
+        if kit_key == "domain_kit" and profile:
+            profile_code = f"from domain_kit.models import DomainModuleSettings; DomainModuleSettings.get_solo().apply_profile({repr(profile)})"
+            try:
+                subprocess.run([sys.executable, str(manage_py), "shell", "-c", profile_code], capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=30)
+                out += f"\nDomain-Kit Profil '{profile}' angewendet."
+            except Exception as exc:
+                out += f"\nDomain-Kit Profil Hinweis: {exc}"
 
     _update_progress(cfg, f"▶ [3/3] Installation von '{kit_key}' abgeschlossen! Starte Server neu...")
     cfg = UpdateSettings.get_solo()

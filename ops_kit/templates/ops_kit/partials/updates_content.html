@@ -161,12 +161,21 @@
                         {% if ok.url_snippet %}<div class="text-muted">{{ ok.url_snippet }}</div>{% endif %}
                     </td>
                     <td class="text-end">
-                        <form method="post" action="{% url 'ops_kit:updates' %}" class="d-inline js-ops-update-form" data-progress-text="{% trans 'Installiere Kit im Hintergrund — bitte warten...' %}">
+                        <form method="post" action="{% url 'ops_kit:updates' %}" class="d-inline-flex align-items-center justify-content-end gap-2 js-ops-update-form" data-progress-text="{% trans 'Installiere Kit im Hintergrund — bitte warten...' %}">
                             {% csrf_token %}
                             <input type="hidden" name="action" value="install_kit">
                             <input type="hidden" name="kit_key" value="{{ ok.key }}">
                             {% if ops_updates_next %}<input type="hidden" name="next" value="{{ ops_updates_next }}">{% endif %}
-                            <button type="submit" class="btn btn-sm btn-outline-primary rounded-pill px-3">
+                            {% if ok.key == 'domain_kit' %}
+                            <select name="profile" class="form-select form-select-sm rounded-pill" style="width: auto; max-width: 170px;" title="{% trans 'Modul-Bereich / Profil' %}">
+                                <option value="all">{% trans "Vollständig (Alle)" %}</option>
+                                <option value="persons">{% trans "Nur Personen" %}</option>
+                                <option value="documents">{% trans "Nur Dokumente" %}</option>
+                                <option value="assets">{% trans "Nur Assets" %}</option>
+                                <option value="master_data">{% trans "Nur Stammdaten" %}</option>
+                            </select>
+                            {% endif %}
+                            <button type="submit" class="btn btn-sm btn-outline-primary rounded-pill px-3 text-nowrap">
                                 <i class="bi bi-plus-circle me-1"></i> {% if ok.pip_installed %}{% trans "Aktualisieren" %}{% else %}{% trans "Nachinstallieren" %}{% endif %}
                             </button>
                         </form>
