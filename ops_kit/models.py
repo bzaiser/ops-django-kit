@@ -52,11 +52,15 @@ class UpdateSettings(models.Model):
     @classmethod
     def get_solo(cls):
         default_repo = str(getattr(settings, "OPS_GITHUB_REPO", "") or "").strip()[:160]
-        obj, created = cls.objects.get_or_create(pk=1, defaults={"github_repo": default_repo})
+        obj, created = cls.objects.using("default").get_or_create(pk=1, defaults={"github_repo": default_repo})
         if not created and not obj.github_repo and default_repo:
             obj.github_repo = default_repo
-            obj.save(update_fields=["github_repo"])
+            obj.save(using="default", update_fields=["github_repo"])
         return obj
+
+    def save(self, *args, **kwargs):
+        kwargs.setdefault("using", "default")
+        return super().save(*args, **kwargs)
 
     def __str__(self):
         return f"UpdateSettings ({self.last_status})"

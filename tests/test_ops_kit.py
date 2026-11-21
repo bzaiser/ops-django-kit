@@ -175,6 +175,102 @@ class OpsKitTests(TestCase):
                 root_idx = new_urls.index("path('',")
                 self.assertLess(cal_idx, root_idx)
 
+    def test_runtime_kits_persistence_and_no_settings_mutation(self):
+        from ops_kit.runtime import (
+            add_runtime_kit,
+            apply_runtime_installed_apps,
+            load_runtime_kits,
+            read_kit_commits,
+            write_kit_commits,
+        )
+        from ops_kit.updater import _auto_wire_kit_in_project
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            conf_dir = tmp_path / "config"
+            conf_dir.mkdir()
+            orig_settings = (
+                "INSTALLED_APPS = ['design_studio', 'ops_kit']\n"
+                "from ops_kit.runtime import apply_runtime_installed_apps\n"
+                "apply_runtime_installed_apps(INSTALLED_APPS, BASE_DIR)\n"
+            )
+            settings_file = conf_dir / "settings.py"
+            settings_file.write_text(orig_settings, encoding="utf-8")
+
+            with self.settings(BASE_DIR=tmp_path, ROOT_URLCONF="config.urls"):
+                notes = _auto_wire_kit_in_project("cal_kit", 'path("calendar/", include("cal_kit.urls")),')
+                # settings.py must remain untouched when runtime hook is present
+                self.assertEqual(settings_file.read_text(encoding="utf-8"), orig_settings)
+                self.assertIn("cal_kit", load_runtime_kits(tmp_path))
+                self.assertTrue(any("installed_kits.json" in n for n in notes))
+
+                # apply_runtime_installed_apps only adds importable kits
+                apps = ["design_studio"]
+                add_runtime_kit("ops_kit", tmp_path)
+                apply_runtime_installed_apps(apps, tmp_path)
+                self.assertIn("ops_kit", apps)
+
+                # Container-wide kit commits store
+                pkg_dir = tmp_path / "ds_pkg"
+                pkg_dir.mkdir()
+                old_target = os.environ.get("DESIGN_STUDIO_TARGET")
+                os.environ["DESIGN_STUDIO_TARGET"] = str(pkg_dir)
+                try:
+                    write_kit_commits({"ops_kit": "abc123456789"}, tmp_path)
+                    self.assertEqual(read_kit_commits(tmp_path).get("ops_kit"), "abc123456789")
+                finally:
+                    if old_target is None:
+                        os.environ.pop("DESIGN_STUDIO_TARGET", None)
+                    else:
+                        os.environ["DESIGN_STUDIO_TARGET"] = old_target
+
+    def test_ops_sync_kits_skips_current_and_syncs_changed(self):
+        from unittest.mock import patch
+        from ops_kit.runtime import read_kit_commits, write_kit_commits
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            pkg_dir = tmp_path / "ds_pkg"
+            (pkg_dir / "ops_kit").mkdir(parents=True)
+            (pkg_dir / "design_studio").mkdir(parents=True)
+            old_target = os.environ.get("DESIGN_STUDIO_TARGET")
+            os.environ["DESIGN_STUDIO_TARGET"] = str(pkg_dir)
+            try:
+                write_kit_commits({"ops_kit": "111111111111", "design_studio": "222222222222"}, tmp_path)
+                calls = []
+
+                def fake_sha(repo):
+                    return "999999999999" if "design-studio" in repo else "111111111111"
+
+                def fake_run(cmd, **kwargs):
+                    calls.append(cmd)
+                    class R:
+                        returncode = 0
+                        stdout = "ok"
+                        stderr = ""
+                    return R()
+
+                out = io.StringIO()
+                with self.settings(BASE_DIR=tmp_path), \
+                     patch("ops_kit.management.commands.ops_sync_kits._fetch_remote_head_sha", side_effect=fake_sha), \
+                     patch("ops_kit.management.commands.ops_sync_kits.active_kit_repos", return_value=[("design_studio", "bzaiser/django-design-studio"), ("ops_kit", "bzaiser/ops-django-kit")]), \
+                     patch("ops_kit.management.commands.ops_sync_kits.subprocess.run", side_effect=fake_run):
+                    call_command("ops_sync_kits", stdout=out)
+
+                self.assertEqual(len(calls), 1)
+                self.assertIn("--target", calls[0])
+                self.assertIn(str(pkg_dir), calls[0])
+                self.assertIn("django-design-studio", calls[0][-1])
+                self.assertEqual(read_kit_commits(tmp_path).get("design_studio"), "999999999999")
+            finally:
+                if old_target is None:
+                    os.environ.pop("DESIGN_STUDIO_TARGET", None)
+                else:
+                    os.environ["DESIGN_STUDIO_TARGET"] = old_target
+
+    def test_no_missing_migrations(self):
+        call_command("makemigrations", "ops_kit", "--check", "--dry-run", verbosity=0)
+
 
 if __name__ == "__main__":
     from django.test.runner import DiscoverRunner

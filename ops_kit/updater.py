@@ -11,6 +11,13 @@ from django.core.management import call_command
 from django.utils import timezone
 
 from .models import UpdateSettings, log_audit
+from .runtime import (
+    add_runtime_kit,
+    get_kit_target_dir,
+    load_runtime_kits,
+    read_kit_commits,
+    write_kit_commits,
+)
 
 KIT_GITHUB_REPOS = {
     "design_studio": "bzaiser/django-design-studio",
@@ -110,7 +117,8 @@ def should_run_startup_check(cfg: UpdateSettings) -> bool:
 
 
 def active_kit_repos() -> list[tuple[str, str]]:
-    installed = set(getattr(settings, "INSTALLED_APPS", []))
+    base_dir = Path(getattr(settings, "BASE_DIR", "."))
+    installed = _installed_apps_from_disk() | set(getattr(settings, "INSTALLED_APPS", [])) | set(load_runtime_kits(base_dir))
     return [(k, repo) for k, repo in KIT_GITHUB_REPOS.items() if k in installed]
 
 
@@ -151,9 +159,8 @@ def _installed_apps_from_disk() -> set[str]:
 
 
 def get_optional_kits_catalog() -> list[dict]:
-    installed_apps = _installed_apps_from_disk()
-    # Also merge in-memory (already-loaded apps) to be safe
-    installed_apps |= set(getattr(settings, "INSTALLED_APPS", []))
+    base_dir = Path(getattr(settings, "BASE_DIR", "."))
+    installed_apps = _installed_apps_from_disk() | set(getattr(settings, "INSTALLED_APPS", [])) | set(load_runtime_kits(base_dir))
     catalog = []
     for key, repo in KIT_GITHUB_REPOS.items():
         if key in installed_apps:
@@ -170,8 +177,22 @@ def get_optional_kits_catalog() -> list[dict]:
     return catalog
 
 
+def _project_uses_runtime_kits(settings_path: Path) -> bool:
+    if not settings_path or not settings_path.exists():
+        return False
+    try:
+        return "apply_runtime_installed_apps" in settings_path.read_text(encoding="utf-8")
+    except Exception:
+        return False
+
+
 def _auto_wire_kit_in_project(kit_key: str, url_snippet: str) -> list[str]:
-    """Safely add kit_key to INSTALLED_APPS and url_snippet to urls.py if not already present."""
+    """Persistently enable kit_key.
+
+    If the project uses ops_kit.runtime (apply_runtime_installed_apps), register
+    the kit in data/installed_kits.json without touching tracked settings.py/urls.py.
+    Otherwise fall back to safe legacy editing of settings.py and urls.py.
+    """
     import os
     import re
     notes = []
@@ -185,6 +206,11 @@ def _auto_wire_kit_in_project(kit_key: str, url_snippet: str) -> list[str]:
         candidates = list(base_dir.rglob("settings.py"))
         if candidates:
             settings_path = candidates[0]
+
+    if _project_uses_runtime_kits(settings_path):
+        if add_runtime_kit(kit_key, base_dir):
+            notes.append(f"data/installed_kits.json: '{kit_key}' persistent aktiviert (settings.py bleibt unverändert).")
+        return notes
 
     root_urlconf = str(getattr(settings, "ROOT_URLCONF", "") or "")
     if root_urlconf:
@@ -288,14 +314,23 @@ def install_kit_package(kit_key: str, user=None, reload_gunicorn: bool = True, p
     repo = KIT_GITHUB_REPOS[kit_key]
     zip_url = f"https://github.com/{repo}/archive/refs/heads/main.zip"
     cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "--force-reinstall", "--no-deps", "--no-cache-dir"]
-    target_dir = Path("/opt/ds-pkg")
-    if target_dir.exists() and os.access(target_dir, os.W_OK):
-        cmd.extend(["--target", str(target_dir)])
+    target_dir = get_kit_target_dir()
+    if target_dir:
+        cmd.extend(["--target", target_dir])
     cmd.append(zip_url)
     proc = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=180, check=True)
     out = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
 
-    _update_progress(cfg, f"▶ [2/3] Konfiguriere '{kit_key}' in settings.py und führe Migrationen aus...")
+    base_dir = Path(getattr(settings, "BASE_DIR", "."))
+    remote_sha = _fetch_remote_head_sha(repo)
+    if remote_sha:
+        write_kit_commits({kit_key: remote_sha}, base_dir)
+        known = dict(cfg.installed_commits_json or {})
+        known[kit_key] = remote_sha
+        cfg.installed_commits_json = known
+        cfg.save(update_fields=["installed_commits_json"])
+
+    _update_progress(cfg, f"▶ [2/3] Konfiguriere '{kit_key}' und führe Migrationen aus...")
     _, url_snippet = KIT_METADATA.get(kit_key, (kit_key, ""))
     try:
         wire_notes = _auto_wire_kit_in_project(kit_key, url_snippet)
@@ -304,16 +339,16 @@ def install_kit_package(kit_key: str, user=None, reload_gunicorn: bool = True, p
     except Exception as exc:
         out += f"\nAuto-Aktivierung Warnung: {exc}"
 
-    manage_py = Path(getattr(settings, "BASE_DIR", ".")) / "manage.py"
+    manage_py = base_dir / "manage.py"
     if manage_py.exists():
-        has_migrate_all = (Path(getattr(settings, "BASE_DIR", ".")) / "core" / "management" / "commands" / "migrate_all.py").exists()
+        has_migrate_all = (base_dir / "core" / "management" / "commands" / "migrate_all.py").exists()
         mig_subcommand = "migrate_all" if has_migrate_all else "migrate"
         for mcmd in (
             [sys.executable, str(manage_py), mig_subcommand] if mig_subcommand == "migrate_all" else [sys.executable, str(manage_py), mig_subcommand, "--noinput"],
             [sys.executable, str(manage_py), "collectstatic", "--clear", "--noinput"],
         ):
             try:
-                mp = subprocess.run(mcmd, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=120)
+                mp = subprocess.run(mcmd, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=180)
                 if mp.stdout:
                     out += "\n" + mp.stdout
                 if mp.stderr:
@@ -322,9 +357,20 @@ def install_kit_package(kit_key: str, user=None, reload_gunicorn: bool = True, p
                 out += f"\n{mcmd[2]} Hinweis: {exc}"
 
         if kit_key == "domain_kit" and profile:
-            profile_code = f"from domain_kit.models import DomainModuleSettings; DomainModuleSettings.get_solo().apply_profile({repr(profile)})"
+            profile_code = (
+                "from domain_kit.models import DomainModuleSettings; "
+                f"DomainModuleSettings.get_solo().apply_profile({repr(profile)}); "
+                "try:\n"
+                "    from core.models import Tenant\n"
+                "    from core.router import register_tenant_db, set_active_tenant\n"
+                "    for t in Tenant.objects.using('default').all():\n"
+                "        register_tenant_db(t.slug); set_active_tenant(t.slug)\n"
+                f"        DomainModuleSettings.get_solo().apply_profile({repr(profile)})\n"
+                "except Exception:\n"
+                "    pass"
+            )
             try:
-                subprocess.run([sys.executable, str(manage_py), "shell", "-c", profile_code], capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=30)
+                subprocess.run([sys.executable, str(manage_py), "shell", "-c", profile_code], capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=45)
                 out += f"\nDomain-Kit Profil '{profile}' angewendet."
             except Exception as exc:
                 out += f"\nDomain-Kit Profil Hinweis: {exc}"
@@ -347,7 +393,12 @@ def check_github_updates(cfg: UpdateSettings | None = None, force: bool = False,
         return cfg.last_result_json or {"status": "disabled", "items": [], "has_updates": False}
 
     fetcher = fetch_json or _default_fetch_json
+    base_dir = Path(getattr(settings, "BASE_DIR", "."))
     known = dict(cfg.installed_commits_json or {})
+    # Container-wide commit store takes precedence so CLI/update-fast and all tenants stay in sync
+    for k, sha in read_kit_commits(base_dir).items():
+        if sha:
+            known[k] = sha
     items = []
     has_updates = False
     errors = []
@@ -539,9 +590,10 @@ def apply_nas_updates(cfg: UpdateSettings | None = None, reload_gunicorn: bool =
             call_command(
                 "design_studio_update",
                 repo=repo_url,
+                target=get_kit_target_dir(),
                 all_kits=False,
                 reload_gunicorn=False,
-                skip_migrate=(k != outdated[-1]),
+                skip_migrate=True,
                 skip_collectstatic=(k != outdated[-1]),
                 stdout=buf,
                 stderr=buf,
@@ -550,30 +602,19 @@ def apply_nas_updates(cfg: UpdateSettings | None = None, reload_gunicorn: bool =
         _update_progress(cfg, "▶ [2/4] Keine Kit-Updates nötig (alle Baukasten-Kits aktuell).")
     out = buf.getvalue()
 
-    # Rewire: ensure every installed kit has its URL + menu entry wired
-    _update_progress(cfg, "▶ [2b/4] Prüfe URL-Verdrahtung für installierte Kits...")
-    installed_apps = set(getattr(settings, "INSTALLED_APPS", []))
-    for kit_key, (_, url_snippet) in KIT_METADATA.items():
-        if kit_key not in installed_apps or not url_snippet:
-            continue
-        try:
-            notes = _auto_wire_kit_in_project(kit_key, url_snippet)
-            if notes:
-                out += f"\nRewire {kit_key}: " + "; ".join(notes)
-        except Exception as exc:
-            out += f"\nRewire {kit_key} Hinweis: {exc}"
-
     _update_progress(cfg, "▶ [3/4] Führe Datenbank-Migrationen & Asset-Sammlung aus...")
     manage_py = base_dir / "manage.py"
     if manage_py.exists():
         has_migrate_all = (base_dir / "core" / "management" / "commands" / "migrate_all.py").exists()
-        if has_migrate_all:
-            try:
-                mp = subprocess.run([sys.executable, str(manage_py), "migrate_all"], capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=120)
-                if mp.stdout:
-                    out += "\n" + mp.stdout
-            except Exception as exc:
-                out += f"\nmigrate_all Hinweis: {exc}"
+        mig_cmd = [sys.executable, str(manage_py), "migrate_all"] if has_migrate_all else [sys.executable, str(manage_py), "migrate", "--noinput"]
+        try:
+            mp = subprocess.run(mig_cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=180)
+            if mp.stdout:
+                out += "\n" + mp.stdout
+            if mp.stderr:
+                out += "\n" + mp.stderr
+        except Exception as exc:
+            out += f"\n{mig_cmd[2]} Hinweis: {exc}"
 
     known = dict(cfg.installed_commits_json or {})
     for item in items:
@@ -581,6 +622,7 @@ def apply_nas_updates(cfg: UpdateSettings | None = None, reload_gunicorn: bool =
             known[item["key"]] = item["remote"]
             item["local"] = item["remote"]
             item["update_available"] = False
+    write_kit_commits({k: v for k, v in known.items() if k in KIT_GITHUB_REPOS}, base_dir)
 
     _update_progress(cfg, "▶ [4/4] Updates erfolgreich eingespielt! Starte Server neu...")
     cfg = UpdateSettings.get_solo()
