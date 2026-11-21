@@ -157,3 +157,13 @@ def get_updates_context():
         "is_desktop": is_desktop_frozen(),
         "optional_kits": get_optional_kits_catalog(),
     }
+
+
+@staff_member_required
+def status_json_view(request):
+    cfg = UpdateSettings.get_solo()
+    return JsonResponse({
+        "status": cfg.last_status,
+        "log": cfg.last_log or "",
+        "last_checked_at": cfg.last_checked_at.isoformat() if cfg.last_checked_at else None,
+    })

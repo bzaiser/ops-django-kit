@@ -140,6 +140,10 @@ class OpsKitTests(TestCase):
         self.assertEqual(cfg.check_interval_hours, 12)
         self.assertEqual(cfg.github_repo, "bzaiser/finanzplan")
 
+        status_resp = self.client.get("/ops/status.json")
+        self.assertEqual(status_resp.status_code, 200)
+        self.assertIn("status", status_resp.json())
+
         if "notify_kit" in settings.INSTALLED_APPS:
             from notify_kit.models import Notification
             from notify_kit.registry import get_topic

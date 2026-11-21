@@ -39,6 +39,35 @@ def get_local_app_version() -> str:
     return ""
 
 
+def get_local_app_commit() -> str:
+    base_dir = Path(getattr(settings, "BASE_DIR", "."))
+    if (base_dir / ".git").exists():
+        try:
+            proc = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(base_dir),
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            if proc.returncode == 0 and proc.stdout.strip():
+                return proc.stdout.strip()[:12]
+        except Exception:
+            pass
+    return ""
+
+
+def _update_progress(cfg: UpdateSettings, message: str, status: str = "running"):
+    try:
+        cfg.last_status = status
+        lines = (cfg.last_log or "").splitlines()
+        if not any(message == l for l in lines):
+            cfg.last_log = ((cfg.last_log + "\n" if cfg.last_log else "") + message)[-4000:]
+        cfg.save(update_fields=["last_status", "last_log"])
+    except Exception:
+        pass
+
+
 def _default_fetch_json(url: str, timeout: int = 4) -> dict:
     import os
     headers = {
@@ -205,7 +234,9 @@ def install_kit_package(kit_key: str, user=None, reload_gunicorn: bool = True) -
     if is_desktop_frozen():
         return "Desktop-Modus (.exe): Nachinstallation im Bundle nicht unterstützt."
     import os
-    import signal
+    cfg = UpdateSettings.get_solo()
+    _update_progress(cfg, f"▶ [1/3] Lade Paket '{kit_key}' von GitHub herunter...")
+
     repo = KIT_GITHUB_REPOS[kit_key]
     zip_url = f"https://github.com/{repo}/archive/refs/heads/main.zip"
     cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "--force-reinstall", "--no-deps", "--no-cache-dir"]
@@ -216,6 +247,7 @@ def install_kit_package(kit_key: str, user=None, reload_gunicorn: bool = True) -
     proc = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=180, check=True)
     out = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
 
+    _update_progress(cfg, f"▶ [2/3] Konfiguriere '{kit_key}' in settings.py und führe Migrationen aus...")
     _, url_snippet = KIT_METADATA.get(kit_key, (kit_key, ""))
     try:
         wire_notes = _auto_wire_kit_in_project(kit_key, url_snippet)
@@ -241,9 +273,10 @@ def install_kit_package(kit_key: str, user=None, reload_gunicorn: bool = True) -
             except Exception as exc:
                 out += f"\n{mcmd[2]} Hinweis: {exc}"
 
+    _update_progress(cfg, f"▶ [3/3] Installation von '{kit_key}' abgeschlossen! Starte Server neu...")
     cfg = UpdateSettings.get_solo()
     cfg.last_status = "updated"
-    cfg.last_log = f"Kit {kit_key} installiert & aktiviert:\n{out}"[-4000:]
+    cfg.last_log = f"{cfg.last_log}\n\nDetail-Protokoll:\n{out}"[-4000:]
     cfg.save(update_fields=["last_status", "last_log"])
     log_audit(user, "KIT_INSTALLED", target=kit_key, details=out[:500])
 
@@ -306,30 +339,52 @@ def check_github_updates(cfg: UpdateSettings | None = None, force: bool = False,
     app_repo = (cfg.github_repo or "").strip().strip("/")
     if app_repo and "/" in app_repo:
         local_ver = get_local_app_version()
-        rel_info = {"key": "app", "repo": app_repo, "kind": "app", "local": local_ver or str(known.get("app") or "")[:12], "remote": "", "message": "", "update_available": False, "url": f"https://github.com/{app_repo}/releases", "download_url": ""}
-        try:
-            rel = fetcher(f"https://api.github.com/repos/{app_repo}/releases/latest")
-            tag = str(rel.get("tag_name") or "").strip()
-            assets = rel.get("assets") or []
-            dl_url = str(assets[0].get("browser_download_url") or "") if assets else str(rel.get("html_url") or "")
-            rel_info["remote"] = tag
-            rel_info["url"] = str(rel.get("html_url") or rel_info["url"])
-            rel_info["download_url"] = dl_url
-            rel_info["message"] = str(rel.get("name") or tag)[:90]
-            if tag and local_ver and tag.lstrip("v") != local_ver.lstrip("v"):
-                rel_info["update_available"] = True
-                has_updates = True
-        except Exception:
+        local_git_head = get_local_app_commit()
+        rel_info = {
+            "key": "app",
+            "repo": app_repo,
+            "kind": "app",
+            "local": local_git_head or local_ver or str(known.get("app") or "")[:12],
+            "remote": "",
+            "message": "",
+            "update_available": False,
+            "url": f"https://github.com/{app_repo}/releases",
+            "download_url": "",
+        }
+        if is_desktop_frozen():
             try:
-                cdata = fetcher(f"https://api.github.com/repos/{app_repo}/commits/main")
-                rsha = str(cdata.get("sha") or "")[:12]
-                lsha = str(known.get("app") or "")[:12]
+                rel = fetcher(f"https://api.github.com/repos/{app_repo}/releases/latest")
+                tag = str(rel.get("tag_name") or "").strip()
+                assets = rel.get("assets") or []
+                dl_url = str(assets[0].get("browser_download_url") or "") if assets else str(rel.get("html_url") or "")
+                rel_info["remote"] = tag
+                rel_info["url"] = str(rel.get("html_url") or rel_info["url"])
+                rel_info["download_url"] = dl_url
+                rel_info["message"] = str(rel.get("name") or tag)[:90]
+                if tag and local_ver and tag.lstrip("v") != local_ver.lstrip("v"):
+                    rel_info["update_available"] = True
+                    has_updates = True
+            except Exception as exc:
+                errors.append(f"app: {exc}")
+        else:
+            try:
+                rsha = _fetch_remote_head_sha(app_repo) if fetch_json is None else ""
+                cmsg = ""
+                if not rsha:
+                    cdata = fetcher(f"https://api.github.com/repos/{app_repo}/commits/main")
+                    rsha = str(cdata.get("sha") or "")[:12]
+                    cmsg = str(((cdata.get("commit") or {}).get("message") or "")).splitlines()[0][:90]
+                lsha = local_git_head or str(known.get("app") or "")[:12]
                 if not lsha and rsha:
                     known["app"] = rsha
                     lsha = rsha
+                elif local_git_head:
+                    known["app"] = local_git_head
+                    lsha = local_git_head
                 rel_info["local"] = lsha
                 rel_info["remote"] = rsha
-                rel_info["message"] = str(((cdata.get("commit") or {}).get("message") or "")).splitlines()[0][:90]
+                rel_info["url"] = f"https://github.com/{app_repo}"
+                rel_info["message"] = cmsg
                 if rsha and lsha and rsha != lsha:
                     rel_info["update_available"] = True
                     has_updates = True
@@ -399,13 +454,24 @@ def apply_nas_updates(cfg: UpdateSettings | None = None, reload_gunicorn: bool =
     # 1. Update app repo if .git exists and update_available
     app_item = next((i for i in items if i.get("kind") == "app" and i.get("update_available")), None)
     if app_item and (base_dir / ".git").is_dir():
+        _update_progress(cfg, f"▶ [1/4] Führe git pull für {app_item.get('repo', 'App')} aus...")
         try:
             gproc = subprocess.run(["git", "pull", "--ff-only"], cwd=str(base_dir), capture_output=True, text=True, timeout=60)
             gout = (gproc.stdout or "") + ("\n" + gproc.stderr if gproc.stderr else "")
             buf.write(f"App Update (git pull):\n{gout}\n")
+            local_head = get_local_app_commit()
+            if local_head:
+                known = dict(cfg.installed_commits_json or {})
+                known["app"] = local_head
+                cfg.installed_commits_json = known
+                app_item["local"] = local_head
+                app_item["update_available"] = False
         except Exception as exc:
             buf.write(f"App Update Warnung: {exc}\n")
+    else:
+        _update_progress(cfg, "▶ [1/4] App-Code ist aktuell.")
 
+    _update_progress(cfg, "▶ [2/4] Lade und aktualisiere Baukasten-Kits von GitHub...")
     outdated = [
         i["key"]
         for i in items
@@ -420,6 +486,18 @@ def apply_nas_updates(cfg: UpdateSettings | None = None, reload_gunicorn: bool =
         call_command("design_studio_update", all_kits=True, reload_gunicorn=False, stdout=buf, stderr=buf)
     out = buf.getvalue()
 
+    _update_progress(cfg, "▶ [3/4] Führe Datenbank-Migrationen & Asset-Sammlung aus...")
+    manage_py = base_dir / "manage.py"
+    if manage_py.exists():
+        has_migrate_all = (base_dir / "core" / "management" / "commands" / "migrate_all.py").exists()
+        if has_migrate_all:
+            try:
+                mp = subprocess.run([sys.executable, str(manage_py), "migrate_all"], capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=120)
+                if mp.stdout:
+                    out += "\n" + mp.stdout
+            except Exception as exc:
+                out += f"\nmigrate_all Hinweis: {exc}"
+
     known = dict(cfg.installed_commits_json or {})
     for item in items:
         if item.get("remote"):
@@ -427,9 +505,11 @@ def apply_nas_updates(cfg: UpdateSettings | None = None, reload_gunicorn: bool =
             item["local"] = item["remote"]
             item["update_available"] = False
 
+    _update_progress(cfg, "▶ [4/4] Updates erfolgreich eingespielt! Starte Server neu...")
+    cfg = UpdateSettings.get_solo()
     cfg.installed_commits_json = known
     cfg.last_status = "updated"
-    cfg.last_log = out[-4000:]
+    cfg.last_log = f"{cfg.last_log}\n\nDetail-Protokoll:\n{out}"[-4000:]
     if isinstance(cfg.last_result_json, dict):
         cfg.last_result_json["has_updates"] = any(i.get("update_available") for i in items)
         cfg.last_result_json["items"] = items
