@@ -17,6 +17,7 @@ KIT_URL_ROUTES: dict[str, tuple[str, str]] = {
     "notify_kit": ("notifications/", "notify_kit.urls"),
     "cal_kit": ("calendar/", "cal_kit.urls"),
     "list_kit": ("lists/", "list_kit.urls"),
+    "site_kit": ("", "site_kit.urls"),
     "ops_kit": ("ops/", "ops_kit.urls"),
 }
 
@@ -27,6 +28,7 @@ KNOWN_KITS: tuple[str, ...] = (
     "notify_kit",
     "cal_kit",
     "list_kit",
+    "site_kit",
     "grid_kit",
     "seed_kit",
     "ops_kit",
