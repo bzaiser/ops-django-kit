@@ -685,19 +685,37 @@ def apply_nas_updates(cfg: UpdateSettings | None = None, reload_gunicorn: bool =
     ]
     if outdated:
         _update_progress(cfg, f"▶ [2/4] Lade Baukasten-Kits von GitHub ({', '.join(outdated)})...")
-        for k in outdated:
-            repo_url = f"https://github.com/{KIT_GITHUB_REPOS[k]}/archive/refs/heads/main.zip"
-            call_command(
-                "design_studio_update",
-                repo=repo_url,
-                target=get_kit_target_dir(),
-                all_kits=False,
-                reload_gunicorn=False,
-                skip_migrate=True,
-                skip_collectstatic=(k != outdated[-1]),
-                stdout=buf,
-                stderr=buf,
-            )
+        repo_urls = [f"https://github.com/{KIT_GITHUB_REPOS[k]}/archive/refs/heads/main.zip" for k in outdated]
+        cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "--force-reinstall", "--no-deps", "--no-cache-dir"]
+        target_dir = get_kit_target_dir()
+        if target_dir:
+            cmd.extend(["--target", target_dir])
+        cmd.extend(repo_urls)
+        try:
+            proc = subprocess.run(cmd, check=True, stdin=subprocess.DEVNULL, timeout=240, capture_output=True, text=True)
+            if proc.stdout:
+                buf.write(proc.stdout + "\n")
+            if proc.stderr:
+                buf.write(proc.stderr + "\n")
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError("pip install Timeout (>240s).") from exc
+        except subprocess.CalledProcessError as exc:
+            err_detail = (getattr(exc, "stderr", None) or getattr(exc, "stdout", None) or "").strip()
+            raise RuntimeError(f"pip install fehlgeschlagen (Exit {exc.returncode}): {err_detail}"[:500]) from exc
+
+        if getattr(settings, "STATIC_ROOT", None):
+            manage_py_cs = base_dir / "manage.py"
+            if manage_py_cs.exists():
+                cs = subprocess.run(
+                    [sys.executable, str(manage_py_cs), "collectstatic", "--clear", "--noinput"],
+                    stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120,
+                )
+                if cs.stdout:
+                    buf.write(cs.stdout + "\n")
+                if cs.stderr:
+                    buf.write(cs.stderr + "\n")
+            else:
+                call_command("collectstatic", clear=True, interactive=False, stdout=buf)
     else:
         _update_progress(cfg, "▶ [2/4] Keine Kit-Updates nötig (alle Baukasten-Kits aktuell).")
     out = buf.getvalue()

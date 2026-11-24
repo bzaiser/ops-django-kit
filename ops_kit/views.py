@@ -1,5 +1,7 @@
+import os
 import shutil
 import threading
+from pathlib import Path
 
 from django.conf import settings
 from django.contrib import messages
@@ -57,6 +59,25 @@ _UPDATE_THREAD = None
 
 def _is_update_thread_alive() -> bool:
     return bool(_UPDATE_THREAD is not None and _UPDATE_THREAD.is_alive())
+
+
+def _is_single_process_server() -> bool:
+    if Path("/.dockerenv").exists() or os.environ.get("RUNNING_IN_DOCKER"):
+        return False
+    if "gunicorn" in os.environ.get("SERVER_SOFTWARE", "").lower():
+        return False
+    return True
+
+
+def _recover_stale_running_status(cfg: UpdateSettings) -> UpdateSettings:
+    """Recover from stuck 'running' state when dev runserver reloads mid-update."""
+    if cfg.last_status == "running" and not _is_update_thread_alive() and _is_single_process_server():
+        cfg.last_status = "error"
+        note = "Update-Prozess wurde durch Server-Neustart unterbrochen."
+        if note not in (cfg.last_log or ""):
+            cfg.last_log = f"{cfg.last_log}\n{note}".strip()
+        cfg.save(update_fields=["last_status", "last_log"])
+    return cfg
 
 
 @staff_member_required
@@ -216,7 +237,7 @@ def updates_view(request):
 
 
 def get_updates_context():
-    cfg = UpdateSettings.get_solo()
+    cfg = _recover_stale_running_status(UpdateSettings.get_solo())
     result = cfg.last_result_json or {}
     domain_installed = "domain_kit" in set(getattr(settings, "INSTALLED_APPS", []))
     domain_modules = None
@@ -264,7 +285,7 @@ def get_updates_context():
 
 @staff_member_required
 def status_json_view(request):
-    cfg = UpdateSettings.get_solo()
+    cfg = _recover_stale_running_status(UpdateSettings.get_solo())
     return JsonResponse({
         "status": cfg.last_status,
         "log": cfg.last_log or "",

@@ -386,13 +386,15 @@ document.addEventListener('DOMContentLoaded', function () {
     var logPre = document.getElementById('ops-last-log-pre');
     var logStatus = document.getElementById('ops-log-status');
     var logSpinner = document.getElementById('ops-log-spinner');
-    var maxPolls = 60;
+    var maxPolls = 180;
     var count = 0;
 
     var timer = setInterval(function () {
         count++;
         if (count > maxPolls) {
             clearInterval(timer);
+            if (logSpinner) logSpinner.classList.add('d-none');
+            if (txt) txt.textContent = '{% trans "Zeitüberschreitung beim Warten auf Update-Abschluss — bitte Seite neu laden." %}';
             return;
         }
         fetch(pollUrl, { headers: { 'X-Requested-With': 'XMLHttpRequest' }, cache: 'no-store' })
