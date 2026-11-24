@@ -647,6 +647,18 @@ def _notify_staff_topic(topic: str, title: str, message: str, level: str = "info
             pass
 
 
+def _is_editable_kit(kit_key: str) -> bool:
+    try:
+        spec = importlib.util.find_spec(kit_key)
+        origin = getattr(spec, "origin", None) if spec else None
+        if not origin:
+            return False
+        norm = origin.replace("\\", "/").lower()
+        return ("/site-packages/" not in norm) and ("/dist-packages/" not in norm) and ("/opt/ds-pkg/" not in norm)
+    except Exception:
+        return False
+
+
 def apply_nas_updates(cfg: UpdateSettings | None = None, reload_gunicorn: bool = True, user=None) -> str:
     cfg = cfg or UpdateSettings.get_solo()
     if is_desktop_frozen():
@@ -683,9 +695,13 @@ def apply_nas_updates(cfg: UpdateSettings | None = None, reload_gunicorn: bool =
         for i in items
         if i.get("kind") == "kit" and i.get("update_available") and i.get("key") in KIT_GITHUB_REPOS
     ]
-    if outdated:
-        _update_progress(cfg, f"▶ [2/4] Lade Baukasten-Kits von GitHub ({', '.join(outdated)})...")
-        repo_urls = [f"https://github.com/{KIT_GITHUB_REPOS[k]}/archive/refs/heads/main.zip" for k in outdated]
+    editable_outdated = [k for k in outdated if _is_editable_kit(k)]
+    pip_outdated = [k for k in outdated if not _is_editable_kit(k)]
+    if editable_outdated:
+        buf.write(f"Editable-Kits (lokale Entwicklung, pip-Update übersprungen): {', '.join(editable_outdated)}\n")
+    if pip_outdated:
+        _update_progress(cfg, f"▶ [2/4] Lade Baukasten-Kits von GitHub ({', '.join(pip_outdated)})...")
+        repo_urls = [f"https://github.com/{KIT_GITHUB_REPOS[k]}/archive/refs/heads/main.zip" for k in pip_outdated]
         cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "--force-reinstall", "--no-deps", "--no-cache-dir"]
         target_dir = get_kit_target_dir()
         if target_dir:
