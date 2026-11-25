@@ -619,13 +619,17 @@ def check_github_updates(cfg: UpdateSettings | None = None, force: bool = False,
             message=f"Neue Versionen gefunden für: {', '.join(updated_names)}",
             level="info",
         )
-    elif errors:
+    else:
+        _resolve_staff_topic("ops.update_available")
+    if errors:
         _notify_staff_topic(
             topic="ops.update_error",
             title="Update-Prüfung fehlgeschlagen",
             message="; ".join(errors)[:400],
             level="danger",
         )
+    else:
+        _resolve_staff_topic("ops.update_error")
 
     return result
 
@@ -645,6 +649,14 @@ def _notify_staff_topic(topic: str, title: str, message: str, level: str = "info
             send_notification(user=staff_user, title=title, message=message, level=level, link=link, topic=topic)
         except Exception:
             pass
+
+
+def _resolve_staff_topic(topic: str):
+    try:
+        from notify_kit.models import Notification
+        Notification.objects.filter(topic=topic, is_read=False).update(is_read=True)
+    except Exception:
+        pass
 
 
 def _is_editable_kit(kit_key: str) -> bool:
@@ -767,6 +779,9 @@ def apply_nas_updates(cfg: UpdateSettings | None = None, reload_gunicorn: bool =
         cfg.last_result_json["has_updates"] = any(i.get("update_available") for i in items)
         cfg.last_result_json["items"] = items
     cfg.save()
+    if not any(i.get("update_available") for i in items):
+        _resolve_staff_topic("ops.update_available")
+    _resolve_staff_topic("ops.update_error")
     log_audit(user, "AUTO_UPDATE_APPLIED", target="all-kits", details=out[:500])
 
     if reload_gunicorn:
