@@ -31,6 +31,7 @@ KIT_GITHUB_REPOS = {
     "cal_kit": "bzaiser/cal-django-kit",
     "list_kit": "bzaiser/list-django-kit",
     "site_kit": "bzaiser/site-django-kit",
+    "finance_kit": "bzaiser/finance-django-kit",
     "grid_kit": "bzaiser/grid-django-kit",
     "seed_kit": "bzaiser/seed-django-kit",
     "ops_kit": "bzaiser/ops-django-kit",
