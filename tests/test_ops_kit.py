@@ -168,6 +168,12 @@ class OpsKitTests(TestCase):
             check_github_updates(cfg, force=True, fetch_json=fake_fetch)
             self.assertEqual(Notification.objects.filter(user=self.staff, topic="ops.update_available").count(), 1)
 
+        def fail_fetch(url):
+            raise RuntimeError("404 Not Found")
+
+        res_err = check_github_updates(cfg=cfg, force=True, fetch_json=fail_fetch)
+        self.assertIn("OPS_GITHUB_TOKEN", res_err["items"][0]["message"])
+
     def test_auto_wire_kit_inserts_before_root_catchall(self):
         from ops_kit.updater import _auto_wire_kit_in_project
         with tempfile.TemporaryDirectory() as tmp:

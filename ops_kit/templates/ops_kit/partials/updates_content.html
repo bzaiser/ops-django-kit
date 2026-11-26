@@ -67,6 +67,9 @@
                     <div class="mb-3">
                         <label class="form-label small fw-semibold" for="updRepo">{% trans "App-Repository auf GitHub (optional)" %}</label>
                         <input type="text" class="form-control form-control-sm" id="updRepo" name="github_repo" value="{{ cfg.github_repo }}" placeholder="z. B. bzaiser/finanzplan">
+                        {% if not has_github_token %}
+                        <div class="form-text small">{% trans "Für private App-Repos & höheres API-Limit OPS_GITHUB_TOKEN in .env setzen." %}</div>
+                        {% endif %}
                     </div>
                     <button type="submit" class="btn btn-sm btn-primary rounded-pill px-4">{% trans "Speichern" %}</button>
                 </form>

@@ -582,6 +582,9 @@ def check_github_updates(cfg: UpdateSettings | None = None, force: bool = False,
                     has_updates = True
             except Exception as exc:
                 errors.append(f"app: {exc}")
+                err_hint = f"Prüfung fehlgeschlagen ({exc}) — bei privatem Repo/Rate-Limit OPS_GITHUB_TOKEN in .env setzen"
+                rel_info["message"] = err_hint[:120]
+                rel_info["full_message"] = err_hint
         else:
             try:
                 rsha = ""
@@ -614,6 +617,9 @@ def check_github_updates(cfg: UpdateSettings | None = None, force: bool = False,
                     has_updates = True
             except Exception as exc:
                 errors.append(f"app: {exc}")
+                err_hint = f"Prüfung fehlgeschlagen ({exc}) — bei privatem Repo/Rate-Limit OPS_GITHUB_TOKEN in .env setzen"
+                rel_info["message"] = err_hint[:120]
+                rel_info["full_message"] = err_hint
         items.insert(0, rel_info)
 
     result = {
@@ -720,8 +726,17 @@ def apply_nas_updates(cfg: UpdateSettings | None = None, reload_gunicorn: bool =
     if app_item and (base_dir / ".git").is_dir():
         _update_progress(cfg, f"▶ [1/4] Führe git pull für {app_item.get('repo', 'App')} aus...")
         try:
-            gproc = subprocess.run(["git", "pull", "--ff-only"], cwd=str(base_dir), capture_output=True, text=True, timeout=60)
+            gh_token = (os.environ.get("OPS_GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN") or "").strip()
+            app_repo_slug = (app_item.get("repo") or "").strip().strip("/")
+            pull_cmd = (
+                ["git", "pull", "--ff-only", f"https://x-access-token:{gh_token}@github.com/{app_repo_slug}.git", "main"]
+                if (gh_token and app_repo_slug and "/" in app_repo_slug)
+                else ["git", "pull", "--ff-only"]
+            )
+            gproc = subprocess.run(pull_cmd, cwd=str(base_dir), capture_output=True, text=True, timeout=60)
             gout = (gproc.stdout or "") + ("\n" + gproc.stderr if gproc.stderr else "")
+            if gh_token:
+                gout = gout.replace(gh_token, "***")
             buf.write(f"App Update (git pull):\n{gout}\n")
             local_head = get_local_app_commit()
             if local_head:

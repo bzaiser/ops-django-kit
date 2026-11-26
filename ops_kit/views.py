@@ -272,6 +272,7 @@ def get_updates_context():
 
     return {
         "cfg": cfg,
+        "has_github_token": bool((os.environ.get("OPS_GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN") or "").strip()),
         "items": result.get("items") or [],
         "has_updates": bool(result.get("has_updates")),
         "is_desktop": is_desktop_frozen(),
