@@ -123,15 +123,51 @@ def get_real_accessible_shares() -> list[dict]:
     return shares
 
 
+def _job_file_path(job_id: str) -> str:
+    import tempfile
+    safe_id = "".join(c for c in str(job_id) if c.isalnum() or c == "-")
+    jdir = os.path.join(tempfile.gettempdir(), "ops_backup_jobs")
+    os.makedirs(jdir, exist_ok=True)
+    return os.path.join(jdir, f"{safe_id}.json")
+
+
+def _write_job_file(job_id: str, data: dict):
+    import json
+    try:
+        serializable = {k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in data.items()}
+        fp = _job_file_path(job_id)
+        tmp = fp + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(serializable, fh)
+        os.replace(tmp, fp)
+    except Exception:
+        pass
+
+
 def get_job_status(job_id: str) -> dict | None:
+    import json
     with _jobs_lock:
-        return BACKUP_JOBS.get(job_id)
+        if job_id in BACKUP_JOBS:
+            return dict(BACKUP_JOBS[job_id])
+    fp = _job_file_path(job_id)
+    if os.path.isfile(fp):
+        try:
+            with open(fp, "r", encoding="utf-8") as fh:
+                return json.load(fh)
+        except Exception:
+            pass
+    return None
 
 
 def _update_job_status(job_id: str, **kwargs):
     with _jobs_lock:
         if job_id in BACKUP_JOBS:
             BACKUP_JOBS[job_id].update(kwargs)
+            _write_job_file(job_id, BACKUP_JOBS[job_id])
+            return
+    existing = get_job_status(job_id) or {"id": job_id}
+    existing.update(kwargs)
+    _write_job_file(job_id, existing)
 
 
 def list_backups(raw_path: str = "") -> list[dict]:
@@ -288,6 +324,10 @@ def start_background_backup(cfg=None) -> tuple[str, str]:
 
     job_id = str(uuid.uuid4())
     with _jobs_lock:
+        # Prune old in-memory entries (>1h)
+        cutoff = timezone.now() - timezone.timedelta(hours=1)
+        for k in [k for k, v in BACKUP_JOBS.items() if v.get("created_at") and v["created_at"] < cutoff]:
+            BACKUP_JOBS.pop(k, None)
         BACKUP_JOBS[job_id] = {
             "id": job_id,
             "status": "pending",
@@ -298,6 +338,7 @@ def start_background_backup(cfg=None) -> tuple[str, str]:
             "error": None,
             "created_at": timezone.now(),
         }
+        _write_job_file(job_id, BACKUP_JOBS[job_id])
     t = threading.Thread(target=_backup_worker_task, args=(job_id, target_path, cfg.backup_max_keep), daemon=True)
     t.start()
     return job_id, target_path
