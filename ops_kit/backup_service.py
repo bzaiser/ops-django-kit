@@ -78,7 +78,10 @@ def get_real_accessible_shares() -> list[dict]:
             if writable:
                 is_separate = True
                 try:
-                    if os.path.abspath("/backups") == os.path.abspath("/app/data/backups"):
+                    if os.stat("/backups").st_dev == os.stat("/app/data").st_dev and os.path.abspath("/backups") == os.path.abspath("/app/data/backups"):
+                        is_separate = False
+                    elif os.path.isdir("/app/data/backups") and os.stat("/backups").st_dev == os.stat("/app/data").st_dev:
+                        # Same mount/volume as /app/data (e.g. ./data/backups fallback)
                         is_separate = False
                 except Exception:
                     pass

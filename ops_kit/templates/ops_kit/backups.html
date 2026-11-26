@@ -71,7 +71,7 @@
                             <div class="small text-muted">{% trans "Leer lassen für Standard:" %} <code>{{ default_backup_dir }}</code></div>
                             {% if is_in_docker and not has_external_mount %}
                             <div class="alert alert-info py-2 px-3 mt-2 mb-0 small">
-                                <i class="bi bi-info-circle me-1"></i>{% trans "Docker-Hinweis: Kein separates Backup-Volume (/backups) gemountet. Backups können hier jederzeit als ZIP heruntergeladen werden." %}
+                                <i class="bi bi-info-circle me-1"></i>{% trans "Docker-Hinweis: Kein separates Backup-Volume (/backups) gemountet. In der .env kann BACKUP_DIR auf ein anderes NAS-Volume, USB-Laufwerk oder eine gemountete Cloud zeigen; alternativ hier jederzeit als ZIP herunterladen." %}
                             </div>
                             {% elif is_same_volume and cfg.backup_path %}
                             <div class="alert alert-warning py-1 px-2 mt-2 mb-0 small">
