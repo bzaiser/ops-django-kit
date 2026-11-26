@@ -95,7 +95,13 @@ def updates_view(request):
                 cfg.check_interval_hours = max(1, min(168, int(request.POST.get("check_interval_hours") or 24)))
             except (TypeError, ValueError):
                 cfg.check_interval_hours = 24
-            cfg.github_repo = (request.POST.get("github_repo") or "").strip()[:160]
+            raw_repo = (request.POST.get("github_repo") or "").strip()[:160]
+            if raw_repo:
+                import re
+                if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", raw_repo):
+                    messages.error(request, "Ungültiges GitHub-Repository-Format (erwartet: owner/repo).")
+                    return redirect("ops_kit:updates")
+            cfg.github_repo = raw_repo
             cfg.save()
             messages.success(request, "Update-Einstellungen gespeichert.")
         elif action == "check_now":
@@ -316,6 +322,33 @@ def backups_view(request):
             cfg.backup_frequency = freq if freq in ("never", "daily", "weekly", "monthly") else "weekly"
             raw_path = (request.POST.get("backup_path") or "").strip()[:500]
             if raw_path:
+                from pathlib import Path
+                from django.conf import settings as dj_settings
+                try:
+                    resolved = Path(raw_path).resolve()
+                except Exception:
+                    messages.error(request, "Ungültiger Sicherungspfad.")
+                    return redirect("ops_kit:backups")
+                forbidden_roots = [
+                    getattr(dj_settings, "STATIC_ROOT", None),
+                    getattr(dj_settings, "MEDIA_ROOT", None),
+                ]
+                for fr in forbidden_roots:
+                    if fr:
+                        fr_res = Path(fr).resolve()
+                        if resolved == fr_res or fr_res in resolved.parents:
+                            messages.error(request, "Sicherungspfad darf nicht im öffentlichen Static- oder Media-Verzeichnis liegen.")
+                            return redirect("ops_kit:backups")
+                allowed_roots = [Path(get_default_backup_dir()).resolve(), Path("/backups").resolve()]
+                import sys, tempfile
+                if getattr(dj_settings, "DEBUG", False) or "test" in " ".join(sys.argv).lower():
+                    allowed_roots.append(Path(tempfile.gettempdir()).resolve())
+                for ar in getattr(dj_settings, "OPS_ALLOWED_BACKUP_DIRS", ()):
+                    if ar:
+                        allowed_roots.append(Path(ar).resolve())
+                if not any(resolved == ar or ar in resolved.parents for ar in allowed_roots):
+                    messages.error(request, "Sicherungspfad liegt außerhalb der erlaubten Backup-Verzeichnisse.")
+                    return redirect("ops_kit:backups")
                 ok, err = test_directory_writable(raw_path)
                 if not ok:
                     messages.error(request, f"Sicherungspfad nicht beschreibbar: {err}")
