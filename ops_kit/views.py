@@ -301,9 +301,7 @@ def status_json_view(request):
     })
 
 
-@staff_member_required
-def backups_view(request):
-    import os
+def get_backups_context() -> dict:
     from .backup_service import (
         get_default_backup_dir,
         get_real_accessible_shares,
@@ -311,10 +309,42 @@ def backups_view(request):
         is_same_volume_as_app,
         list_backups,
         resolve_backup_dir,
+    )
+
+    cfg = UpdateSettings.get_solo()
+    shares = get_real_accessible_shares()
+    has_external_mount = any(s.get("is_other_volume") for s in shares)
+    resolved_dir = resolve_backup_dir(cfg.backup_path)
+    return {
+        "cfg": cfg,
+        "default_backup_dir": get_default_backup_dir(),
+        "resolved_backup_dir": resolved_dir,
+        "available_shares": shares,
+        "is_in_docker": is_running_in_docker(),
+        "has_external_mount": has_external_mount,
+        "is_same_volume": is_same_volume_as_app(resolved_dir),
+        "backups": list_backups(cfg.backup_path),
+    }
+
+
+@staff_member_required
+def backups_view(request):
+    import os
+    from django.utils.http import url_has_allowed_host_and_scheme
+    from .backup_service import (
+        get_default_backup_dir,
+        resolve_backup_dir,
         test_directory_writable,
     )
 
     cfg = UpdateSettings.get_solo()
+    next_url = (request.POST.get("next") or "").strip()
+    if next_url and not url_has_allowed_host_and_scheme(
+        next_url, allowed_hosts={request.get_host()}, require_https=request.is_secure()
+    ):
+        next_url = ""
+    redirect_target = next_url or "ops_kit:backups"
+
     if request.method == "POST":
         action = request.POST.get("action") or "save_backup_config"
         if action == "save_backup_config":
@@ -328,7 +358,7 @@ def backups_view(request):
                     resolved = Path(raw_path).resolve()
                 except Exception:
                     messages.error(request, "Ungültiger Sicherungspfad.")
-                    return redirect("ops_kit:backups")
+                    return redirect(redirect_target)
                 forbidden_roots = [
                     getattr(dj_settings, "STATIC_ROOT", None),
                     getattr(dj_settings, "MEDIA_ROOT", None),
@@ -338,7 +368,7 @@ def backups_view(request):
                         fr_res = Path(fr).resolve()
                         if resolved == fr_res or fr_res in resolved.parents:
                             messages.error(request, "Sicherungspfad darf nicht im öffentlichen Static- oder Media-Verzeichnis liegen.")
-                            return redirect("ops_kit:backups")
+                            return redirect(redirect_target)
                 allowed_roots = [Path(get_default_backup_dir()).resolve(), Path("/backups").resolve()]
                 import sys, tempfile
                 if getattr(dj_settings, "DEBUG", False) or "test" in " ".join(sys.argv).lower():
@@ -348,11 +378,11 @@ def backups_view(request):
                         allowed_roots.append(Path(ar).resolve())
                 if not any(resolved == ar or ar in resolved.parents for ar in allowed_roots):
                     messages.error(request, "Sicherungspfad liegt außerhalb der erlaubten Backup-Verzeichnisse.")
-                    return redirect("ops_kit:backups")
+                    return redirect(redirect_target)
                 ok, err = test_directory_writable(raw_path)
                 if not ok:
                     messages.error(request, f"Sicherungspfad nicht beschreibbar: {err}")
-                    return redirect("ops_kit:backups")
+                    return redirect(redirect_target)
             cfg.backup_path = raw_path
             try:
                 cfg.backup_max_keep = max(1, min(100, int(request.POST.get("backup_max_keep") or 10)))
@@ -370,21 +400,9 @@ def backups_view(request):
                 if os.path.isfile(fp):
                     os.remove(fp)
                     messages.success(request, f"Sicherung „{fname}“ gelöscht.")
-        return redirect("ops_kit:backups")
+        return redirect(redirect_target)
 
-    shares = get_real_accessible_shares()
-    has_external_mount = any(s.get("is_other_volume") for s in shares)
-    resolved_dir = resolve_backup_dir(cfg.backup_path)
-    return render(request, "ops_kit/backups.html", {
-        "cfg": cfg,
-        "default_backup_dir": get_default_backup_dir(),
-        "resolved_backup_dir": resolved_dir,
-        "available_shares": shares,
-        "is_in_docker": is_running_in_docker(),
-        "has_external_mount": has_external_mount,
-        "is_same_volume": is_same_volume_as_app(resolved_dir),
-        "backups": list_backups(cfg.backup_path),
-    })
+    return render(request, "ops_kit/backups.html", get_backups_context())
 
 
 @staff_member_required
