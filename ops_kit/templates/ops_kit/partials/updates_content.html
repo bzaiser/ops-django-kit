@@ -40,7 +40,7 @@
 </div>
 
 <div class="row g-3">
-    <div class="col-12 col-lg-5">
+    <div class="col-12 col-lg-4 col-xl-3">
         <div class="card shadow-sm h-100">
             <div class="card-header fw-bold"><i class="bi bi-sliders me-1"></i> {% trans "Konfiguration" %}</div>
             <div class="card-body">
@@ -74,7 +74,7 @@
         </div>
     </div>
 
-    <div class="col-12 col-lg-7">
+    <div class="col-12 col-lg-8 col-xl-9">
         <div class="card shadow-sm h-100">
             <div class="card-header fw-bold d-flex justify-content-between align-items-center">
                 <span><i class="bi bi-boxes me-1"></i> {% trans "Paket- & App-Status" %}</span>
@@ -85,13 +85,13 @@
                 {% endif %}
             </div>
             <div class="table-responsive">
-                <table class="table table-hover align-middle mb-0">
+                <table class="table table-sm table-hover align-middle mb-0">
                     <thead>
                         <tr>
                             <th>{% trans "Paket" %}</th>
-                            <th>{% trans "Lokal" %}</th>
-                            <th>{% trans "GitHub" %}</th>
-                            <th>{% trans "Status" %}</th>
+                            <th>{% trans "Lokal / GitHub" %}</th>
+                            <th>{% trans "Letzte Änderung" %}</th>
+                            <th class="text-end">{% trans "Status" %}</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -99,11 +99,22 @@
                         <tr>
                             <td>
                                 <div class="fw-semibold">{{ item.key }}</div>
-                                <div class="small text-muted">{{ item.message|default:item.repo }}</div>
+                                <div class="small text-muted">{{ item.repo }}</div>
                             </td>
-                            <td class="small font-monospace">{{ item.local|default:"—" }}</td>
-                            <td class="small font-monospace">{{ item.remote|default:"—" }}</td>
-                            <td>
+                            <td class="small font-monospace text-nowrap">
+                                <div><span class="text-muted">L:</span> {{ item.local|slice:":7"|default:"—" }}</div>
+                                <div><span class="text-muted">G:</span> <span class="{% if item.update_available %}text-warning-emphasis fw-bold{% endif %}">{{ item.remote|slice:":7"|default:"—" }}</span></div>
+                            </td>
+                            <td style="max-width: 280px;">
+                                {% if item.message or item.full_message %}
+                                <div class="small text-truncate" style="cursor: help;" title="{{ item.full_message|default:item.message }}" data-bs-toggle="tooltip" data-bs-placement="top">
+                                    {{ item.message|default:item.full_message }}
+                                </div>
+                                {% else %}
+                                <span class="small text-muted">—</span>
+                                {% endif %}
+                            </td>
+                            <td class="text-end text-nowrap">
                                 {% if item.update_available %}
                                     {% if item.download_url %}
                                     <a href="{{ item.download_url }}" target="_blank" rel="noopener" class="btn btn-sm btn-warning rounded-pill px-3">

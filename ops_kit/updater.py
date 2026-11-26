@@ -507,12 +507,19 @@ def check_github_updates(cfg: UpdateSettings | None = None, force: bool = False,
     for key, repo in active_kit_repos():
         url = f"https://api.github.com/repos/{repo}/commits/main"
         try:
-            remote_sha = _fetch_remote_head_sha(repo) if fetch_json is None else ""
+            remote_sha = ""
             commit_msg = ""
-            if not remote_sha:
+            full_msg = ""
+            try:
                 data = fetcher(url)
                 remote_sha = str(data.get("sha") or "")[:12]
-                commit_msg = str(((data.get("commit") or {}).get("message") or "")).splitlines()[0][:90]
+                full_msg = str((data.get("commit") or {}).get("message") or "").strip()
+                commit_msg = full_msg.splitlines()[0][:120] if full_msg else ""
+            except Exception:
+                if fetch_json is not None:
+                    raise
+            if not remote_sha and fetch_json is None:
+                remote_sha = _fetch_remote_head_sha(repo)
             local_sha = str(known.get(key) or "")[:12]
             if not local_sha and remote_sha:
                 # Erster Baseline-Scan: aktuellen Stand merken, wenn noch nichts hinterlegt ist
@@ -528,6 +535,7 @@ def check_github_updates(cfg: UpdateSettings | None = None, force: bool = False,
                 "local": local_sha,
                 "remote": remote_sha,
                 "message": commit_msg,
+                "full_message": full_msg,
                 "update_available": update_avail,
                 "url": f"https://github.com/{repo}",
             })
@@ -576,12 +584,19 @@ def check_github_updates(cfg: UpdateSettings | None = None, force: bool = False,
                 errors.append(f"app: {exc}")
         else:
             try:
-                rsha = _fetch_remote_head_sha(app_repo) if fetch_json is None else ""
+                rsha = ""
                 cmsg = ""
-                if not rsha:
+                full_cmsg = ""
+                try:
                     cdata = fetcher(f"https://api.github.com/repos/{app_repo}/commits/main")
                     rsha = str(cdata.get("sha") or "")[:12]
-                    cmsg = str(((cdata.get("commit") or {}).get("message") or "")).splitlines()[0][:90]
+                    full_cmsg = str((cdata.get("commit") or {}).get("message") or "").strip()
+                    cmsg = full_cmsg.splitlines()[0][:120] if full_cmsg else ""
+                except Exception:
+                    if fetch_json is not None:
+                        raise
+                if not rsha and fetch_json is None:
+                    rsha = _fetch_remote_head_sha(app_repo)
                 lsha = local_git_head or str(known.get("app") or "")[:12]
                 if not lsha and rsha:
                     known["app"] = rsha
@@ -593,6 +608,7 @@ def check_github_updates(cfg: UpdateSettings | None = None, force: bool = False,
                 rel_info["remote"] = rsha
                 rel_info["url"] = f"https://github.com/{app_repo}"
                 rel_info["message"] = cmsg
+                rel_info["full_message"] = full_cmsg
                 if rsha and lsha and rsha != lsha:
                     rel_info["update_available"] = True
                     has_updates = True
