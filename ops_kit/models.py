@@ -48,6 +48,11 @@ class UpdateSettings(models.Model):
     installed_commits_json = models.JSONField(default=dict, blank=True)
     last_result_json = models.JSONField(default=dict, blank=True)
     last_log = models.TextField(blank=True, default="")
+    backup_frequency = models.CharField(max_length=16, default="weekly")
+    backup_path = models.CharField(max_length=500, blank=True, default="")
+    backup_max_keep = models.PositiveSmallIntegerField(default=10)
+    backup_last_run = models.DateTimeField(null=True, blank=True)
+    backup_before_update = models.BooleanField(default=True)
 
     @classmethod
     def get_solo(cls):

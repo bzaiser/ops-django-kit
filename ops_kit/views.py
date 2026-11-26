@@ -10,8 +10,9 @@ from django.db import connection, connections
 from django.http import JsonResponse
 from django.shortcuts import redirect, render
 from django.utils.http import url_has_allowed_host_and_scheme
+from django.views.decorators.http import require_POST
 
-from .models import AuditLog, UpdateSettings
+from .models import AuditLog, UpdateSettings, log_audit
 from .updater import (
     KIT_METADATA,
     active_kit_repos,
@@ -291,3 +292,109 @@ def status_json_view(request):
         "log": cfg.last_log or "",
         "last_checked_at": cfg.last_checked_at.isoformat() if cfg.last_checked_at else None,
     })
+
+
+@staff_member_required
+def backups_view(request):
+    import os
+    from .backup_service import (
+        get_default_backup_dir,
+        get_real_accessible_shares,
+        is_running_in_docker,
+        is_same_volume_as_app,
+        list_backups,
+        resolve_backup_dir,
+        test_directory_writable,
+    )
+
+    cfg = UpdateSettings.get_solo()
+    if request.method == "POST":
+        action = request.POST.get("action") or "save_backup_config"
+        if action == "save_backup_config":
+            freq = (request.POST.get("backup_frequency") or "weekly").strip()
+            cfg.backup_frequency = freq if freq in ("never", "daily", "weekly", "monthly") else "weekly"
+            raw_path = (request.POST.get("backup_path") or "").strip()[:500]
+            if raw_path:
+                ok, err = test_directory_writable(raw_path)
+                if not ok:
+                    messages.error(request, f"Sicherungspfad nicht beschreibbar: {err}")
+                    return redirect("ops_kit:backups")
+            cfg.backup_path = raw_path
+            try:
+                cfg.backup_max_keep = max(1, min(100, int(request.POST.get("backup_max_keep") or 10)))
+            except (TypeError, ValueError):
+                cfg.backup_max_keep = 10
+            cfg.backup_before_update = bool(request.POST.get("backup_before_update"))
+            cfg.save(update_fields=["backup_frequency", "backup_path", "backup_max_keep", "backup_before_update"])
+            log_audit(request.user, "backup_config_saved", "UpdateSettings", f"freq={cfg.backup_frequency}, keep={cfg.backup_max_keep}", request=request)
+            messages.success(request, "Backup-Einstellungen gespeichert.")
+        elif action == "delete_backup":
+            fname = os.path.basename(request.POST.get("filename") or "")
+            if fname.startswith(("app_backup_", "backup_")) and fname.endswith((".zip", ".json")):
+                target_dir = resolve_backup_dir(cfg.backup_path)
+                fp = os.path.join(target_dir, fname)
+                if os.path.isfile(fp):
+                    os.remove(fp)
+                    messages.success(request, f"Sicherung „{fname}“ gelöscht.")
+        return redirect("ops_kit:backups")
+
+    shares = get_real_accessible_shares()
+    has_external_mount = any(s.get("is_other_volume") for s in shares)
+    resolved_dir = resolve_backup_dir(cfg.backup_path)
+    return render(request, "ops_kit/backups.html", {
+        "cfg": cfg,
+        "default_backup_dir": get_default_backup_dir(),
+        "resolved_backup_dir": resolved_dir,
+        "available_shares": shares,
+        "is_in_docker": is_running_in_docker(),
+        "has_external_mount": has_external_mount,
+        "is_same_volume": is_same_volume_as_app(resolved_dir),
+        "backups": list_backups(cfg.backup_path),
+    })
+
+
+@staff_member_required
+@require_POST
+def backup_start_view(request):
+    from .backup_service import start_background_backup
+
+    cfg = UpdateSettings.get_solo()
+    try:
+        job_id, target_dir = start_background_backup(cfg)
+        log_audit(request.user, "backup_started", target_dir, f"job={job_id}", request=request)
+        return JsonResponse({"ok": True, "job_id": job_id, "target_directory": target_dir})
+    except Exception as exc:
+        return JsonResponse({"ok": False, "error": str(exc)}, status=400)
+
+
+@staff_member_required
+def backup_status_view(request, job_id):
+    from .backup_service import get_job_status
+
+    job = get_job_status(job_id)
+    if not job:
+        return JsonResponse({"ok": False, "status": "not_found"}, status=404)
+    return JsonResponse({
+        "ok": True,
+        "status": job.get("status"),
+        "progress": job.get("progress", 0),
+        "step_label": job.get("step_label", ""),
+        "filename": job.get("filename", ""),
+        "error": job.get("error"),
+    })
+
+
+@staff_member_required
+def backup_download_view(request, filename):
+    import os
+    from django.http import FileResponse, Http404
+    from .backup_service import resolve_backup_dir
+
+    safe_name = os.path.basename(filename or "")
+    if not safe_name.startswith(("app_backup_", "backup_")) or not safe_name.endswith((".zip", ".json")):
+        raise Http404()
+    cfg = UpdateSettings.get_solo()
+    fp = os.path.join(resolve_backup_dir(cfg.backup_path), safe_name)
+    if not os.path.isfile(fp):
+        raise Http404()
+    return FileResponse(open(fp, "rb"), as_attachment=True, filename=safe_name)

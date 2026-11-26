@@ -632,6 +632,13 @@ def check_github_updates(cfg: UpdateSettings | None = None, force: bool = False,
     else:
         _resolve_staff_topic("ops.update_error")
 
+    try:
+        from .backup_service import is_backup_due, start_background_backup
+        if is_backup_due(cfg):
+            start_background_backup(cfg)
+    except Exception:
+        pass
+
     return result
 
 
@@ -682,6 +689,15 @@ def apply_nas_updates(cfg: UpdateSettings | None = None, reload_gunicorn: bool =
     buf = io.StringIO()
     base_dir = Path(getattr(settings, "BASE_DIR", "."))
     items = (cfg.last_result_json or {}).get("items") or []
+
+    if getattr(cfg, "backup_before_update", True):
+        try:
+            from .backup_service import run_sync_backup
+            _update_progress(cfg, "▶ Erstelle Datensicherung vor Update...")
+            _fp, bname, bsize = run_sync_backup(cfg)
+            buf.write(f"Pre-Update-Backup: {bname} ({bsize:.2f} MB)\n")
+        except Exception as exc:
+            buf.write(f"Pre-Update-Backup Warnung: {exc}\n")
 
     # 1. Update app repo if .git exists and update_available
     app_item = next((i for i in items if i.get("kind") == "app" and i.get("update_available")), None)

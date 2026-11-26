@@ -88,8 +88,23 @@ class OpsKitTests(TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out = io.StringIO()
             call_command("ops_backup", output_dir=tmp, stdout=out)
-            files = list(Path(tmp).glob("backup_*.json"))
+            files = list(Path(tmp).glob("app_backup_*.zip"))
             self.assertEqual(len(files), 1)
+
+            r_cfg = self.client.post("/ops/backups/", {
+                "action": "save_backup_config",
+                "backup_frequency": "daily",
+                "backup_max_keep": "5",
+                "backup_path": tmp,
+                "backup_before_update": "1",
+            })
+            self.assertEqual(r_cfg.status_code, 302)
+            r_page = self.client.get("/ops/backups/")
+            self.assertEqual(r_page.status_code, 200)
+            self.assertIn(files[0].name, r_page.content.decode("utf-8"))
+            r_dl = self.client.get(f"/ops/backups/download/{files[0].name}/")
+            self.assertEqual(r_dl.status_code, 200)
+            r_dl.close()
 
     def test_github_auto_update_settings_check_and_startup_interval(self):
         from ops_kit.models import UpdateSettings
